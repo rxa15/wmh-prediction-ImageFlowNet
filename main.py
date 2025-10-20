@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 import os
 import torch
 import torch.nn as nn
@@ -15,6 +17,8 @@ from torch.optim.lr_scheduler import _LRScheduler
 import pandas as pd
 import re
 import random
+import timm
+import torch.nn.functional as F
 
 
 class LinearWarmupCosineAnnealingLR(_LRScheduler):
@@ -97,7 +101,7 @@ class FLAIREvolutionDataset(Dataset):
         self.index_map = []
         self.patient_ids = set()
 
-        print(f"ðŸ“‚ Scanning folders in {root_dir} ...")
+        print(f"📂 Scanning folders in {root_dir} ...")
 
         # Step 1: Identify FLAIR and WMH folders by scan pair name
         folder_map = defaultdict(dict)
@@ -113,7 +117,7 @@ class FLAIREvolutionDataset(Dataset):
                 key = folder.split("_WMH")[0]
                 folder_map[key]["WMH"] = folder_path
 
-        print(f"âœ… Found {len(folder_map)} scan-pair folders (e.g. Scan1Wave2, Scan2Wave3, ...).")
+        print(f"✅ Found {len(folder_map)} scan-pair folders (e.g. Scan1Wave2, Scan2Wave3, ...).")
 
         # Step 2: Iterate over all scan-pairs
         for scan_pair, paths in folder_map.items():
@@ -126,7 +130,7 @@ class FLAIREvolutionDataset(Dataset):
             import re
             match = re.match(r"Scan(\d+)Wave(\d+)", scan_pair)
             if not match:
-                print(f"âš ï¸ Skipping malformed folder name: {scan_pair}")
+                print(f"⚠️ Skipping malformed folder name: {scan_pair}")
                 continue
             scan_idx, wave_idx = map(float, match.groups())
             time_delta = wave_idx - scan_idx
@@ -139,7 +143,7 @@ class FLAIREvolutionDataset(Dataset):
 
                 match = re.match(r"LBC36(\d+)_(\d+)_", fname)
                 if not match:
-                    print(f"âš ï¸ Could not parse patient info from filename: {fname}")
+                    print(f"⚠️ Could not parse patient info from filename: {fname}")
                     continue
 
                 patient_id, _ = match.groups()
@@ -165,10 +169,10 @@ class FLAIREvolutionDataset(Dataset):
                         })
                         self.patient_ids.add(patient_id)
                 except Exception as e:
-                    print(f"âš ï¸ Could not load {flair_path}: {e}")
+                    print(f"⚠️ Could not load {flair_path}: {e}")
                     continue
 
-        print(f"ðŸ“Š Dataset ready. Found {len(self.index_map)} slices from {len(self.patient_ids)} patients.")
+        print(f"📊 Dataset ready. Found {len(self.index_map)} slices from {len(self.patient_ids)} patients.")
 
     def _load_slice(self, file_path, slice_idx):
         vol = nib.load(file_path).get_fdata(dtype=np.float32)
@@ -237,7 +241,7 @@ def visualize_results(source, ground_truth, predicted, patient_ids, slice_indice
 
         plt.subplot(n_samples, 3, i * 3 + 2)
         plt.imshow(ground_truth[i, 0].cpu().numpy(), cmap='gray')
-        plt.title("Ground Truth (Wave T+Î”t)")
+        plt.title("Ground Truth (Wave T+Δt)")
         plt.axis('off')
 
         plt.subplot(n_samples, 3, i * 3 + 3)
@@ -283,7 +287,7 @@ def plot_fold_history(history, fold_idx, save_dir="results"):
     fig.tight_layout(rect=[0, 0.03, 1, 0.95])
     plt.savefig(save_path)
     plt.close()
-    print(f"ðŸ“ˆ Training history plot saved to {save_path}")
+    print(f"📈 Training history plot saved to {save_path}")
 
 # Unused now
 def test_single_model(model_path, test_loader, scan_pair="Scan1Wave2"):
@@ -317,19 +321,19 @@ def test_single_model(model_path, test_loader, scan_pair="Scan1Wave2"):
             time_deltas = batch["time_delta"].to(DEVICE)
             slice_indices, patient_ids = batch["slice_idx"], batch["patient_id"]
 
-            # --- Normal forward (Î”t â†’ T2)
+            # --- Normal forward (Δt → T2)
             t_normal = time_deltas[0:1]
             pred_T2 = torch.sigmoid(model(source_img, t=t_normal))
 
-            # --- Interpolation (0.5 Ã— Î”t â†’ T1)
+            # --- Interpolation (0.5 × Δt → T1)
             t_half = time_deltas[0:1] * 0.5
             pred_T1 = torch.sigmoid(model(source_img, t=t_half))
 
-            # --- Extrapolation (1.5 Ã— Î”t â†’ T3)
+            # --- Extrapolation (1.5 × Δt → T3)
             t_future = time_deltas[0:1] * 1.5
             pred_T3 = torch.sigmoid(model(source_img, t=t_future))
 
-            # --- Metrics (using Î”t â†’ T2)
+            # --- Metrics (using Δt → T2)
             dice.update(pred_T2, target_img)
             mse.update(pred_T2, target_img)
             psnr.update(pred_T2, target_img)
@@ -362,9 +366,9 @@ def test_single_model(model_path, test_loader, scan_pair="Scan1Wave2"):
           f"Dice={final_dice:.4f}, PSNR={final_psnr:.4f}, "
           f"SSIM={final_ssim:.4f}, MSE={final_mse:.6f}")
     print(f"Saved predictions:\n"
-          f"  â†³ Interpolation (T1): {save_dirs['T1_interp']}\n"
-          f"  â†³ Normal (T2):        {save_dirs['T2_normal']}\n"
-          f"  â†³ Extrapolation (T3): {save_dirs['T3_extra']}\n")
+          f"  ↳ Interpolation (T1): {save_dirs['T1_interp']}\n"
+          f"  ↳ Normal (T2):        {save_dirs['T2_normal']}\n"
+          f"  ↳ Extrapolation (T3): {save_dirs['T3_extra']}\n")
 
     return {
         'model_path': model_path,
@@ -443,7 +447,7 @@ def evaluate_and_visualize_tasks(model_path, source_loader, gt_loaders, device, 
                     continue
 
     # --- Stage 2: Save collected predictions as 3D NIfTI volumes ---
-    print("\nðŸ’¾ Collecting and saving predictions as 3D NIfTI volumes...")
+    print("\n💾 Collecting and saving predictions as 3D NIfTI volumes...")
     for task_name, predictions_by_patient in tqdm(patient_predictions.items(), desc="Saving 3D Volumes"):
         gt_pair_name = tasks[task_name]["scan_pair"]
         model_prefix = os.path.basename(model_path).split('.')[0]
@@ -472,9 +476,9 @@ def evaluate_and_visualize_tasks(model_path, source_loader, gt_loaders, device, 
                 original_nii = nib.load(os.path.join(original_scans_dir, original_file))
                 affine = original_nii.affine
             except (StopIteration, FileNotFoundError):
-                print(f"âš ï¸ Warning: Original scan for patient {patient_id} not found. Using default affine.")
+                print(f"⚠️ Warning: Original scan for patient {patient_id} not found. Using default affine.")
             except Exception as e:
-                print(f"âš ï¸ Warning: Could not load original scan for patient {patient_id}. Error: {e}")
+                print(f"⚠️ Warning: Could not load original scan for patient {patient_id}. Error: {e}")
 
 
             # --- Save the complete 3D NIfTI file ---
@@ -554,7 +558,7 @@ def test_specific_times(model_path, source_loader, gt_loaders):
                     print(f"Warning: No more ground truth images for {name} to compare with.")
                     continue
 
-    print("\nâœ… Specific time point evaluation complete.")
+    print("\n✅ Specific time point evaluation complete.")
     print("Predictions saved in 'results/' directory with corresponding scan names.")
 
 # === MODIFIED: train_epoch now returns average losses ===
@@ -663,7 +667,6 @@ def load_folds_from_csv(fold_csv_path):
     return folds
 
 # Main logic
-# Main logic
 def main():
     print("Initializing dataset...")
     full_dataset = FLAIREvolutionDataset(root_dir=ROOT_DIR, max_slices_per_patient=MAX_SLICES)
@@ -677,7 +680,7 @@ def main():
     print(f"Example dataset patient IDs: {list(full_dataset.patient_ids)[:5]}")
 
     # --- 1. K-Fold Cross-Validation Training ---
-    print(f"\n" + "="*50 + f"\nðŸ“ˆ Starting {K_FOLDS}-Fold Cross-Validation Training..." + "\n" + "="*50)
+    print(f"\n" + "="*50 + f"\n📈 Starting {K_FOLDS}-Fold Cross-Validation Training..." + "\n" + "="*50)
 
     for val_fold_idx in CV_FOLDS:
         print(f"\n" + "="*50 + f"\n K-Fold Run: Validating on Fold {val_fold_idx} " + "\n" + "="*50)
@@ -735,14 +738,14 @@ def main():
             if val_pred_psnr > best_val_psnr:
                 best_val_psnr = val_pred_psnr
                 torch.save(model.state_dict(), model_save_path)
-                print(f"âœ… Val PSNR improved. Model saved to {model_save_path}")
+                print(f"✅ Val PSNR improved. Model saved to {model_save_path}")
 
             scheduler.step()
         
         plot_fold_history(history, val_fold_idx)
 
     # --- 2. Final Evaluation on the Held-Out Test Set ---
-    print("\n" + "="*60 + "\nâœ… CV Training Complete. Starting Final Evaluation on Held-Out Test Set." + "\n" + "="*60)
+    print("\n" + "="*60 + "\n✅ CV Training Complete. Starting Final Evaluation on Held-Out Test Set." + "\n" + "="*60)
     
     # Define the single, held-out test set
     test_pids = folds_dict[TEST_FOLD][:MAX_PATIENTS_PER_FOLD]
@@ -767,22 +770,22 @@ def main():
     all_results = [evaluate_and_visualize_tasks(path, source_loader, gt_loaders, DEVICE, original_scans_dir=original_scans_dir_for_affine) for path in model_paths]
 
     # --- 3. Report Final Aggregated Results ---
-    print("\n" + "="*60 + "\n============= Final Test Set Results (Mean Â± Std Dev) =============" + "\n" + "="*60)
+    print("\n" + "="*60 + "\n============= Final Test Set Results (Mean +/- Std Dev) =============" + "\n" + "="*60)
     
     # Aggregate metrics from all fold models
     interp_psnrs = [r['Interpolation_t1']['PSNR'] for r in all_results]
     pred_psnrs   = [r['Prediction_t2']['PSNR'] for r in all_results]
     extrap_psnrs = [r['Extrapolation_t3']['PSNR'] for r in all_results]
 
-    print(f"Interpolation PSNR (t=1->2): {np.mean(interp_psnrs):.4f} Â± {np.std(interp_psnrs):.4f}")
-    print(f"Prediction PSNR    (t=1->3): {np.mean(pred_psnrs):.4f} Â± {np.std(pred_psnrs):.4f}")
-    print(f"Extrapolation PSNR (t=1->4): {np.mean(extrap_psnrs):.4f} Â± {np.std(extrap_psnrs):.4f}")
+    print(f"Interpolation PSNR (t=1->2): {np.mean(interp_psnrs):.4f} +/- {np.std(interp_psnrs):.4f}")
+    print(f"Prediction PSNR    (t=1->3): {np.mean(pred_psnrs):.4f} +/- {np.std(pred_psnrs):.4f}")
+    print(f"Extrapolation PSNR (t=1->4): {np.mean(extrap_psnrs):.4f} +/- {np.std(extrap_psnrs):.4f}")
     print("="*60)
 
     # Find the single best model based on prediction PSNR to use for Stage 2
     best_result = max(all_results, key=lambda x: x['Prediction_t2']['PSNR'])
     best_model_name = os.path.basename(best_result['model_path']).split('.')[0]
-    print(f"ðŸ† Best single model for Stage 2: {best_model_name} (Prediction PSNR: {max(pred_psnrs):.4f})")
+    print(f"🏆 Best single model for Stage 2: {best_model_name} (Prediction PSNR: {max(pred_psnrs):.4f})")
 
     predicted_flair_dir = f"results/{best_model_name}_Pred_Scan3Wave4"
     ground_truth_wmh_dir = os.path.join(ROOT_DIR, "Scan3Wave4_WMH")
@@ -833,7 +836,7 @@ def save_segmentation_sample(model, loader, device, filename="segmentation_sampl
 
         # Plot Predicted WMH Mask
         axes[2].imshow(pred_mask, cmap='jet')
-        axes[2].set_title("U-Net Predicted Mask")
+        axes[2].set_title("Swin UNETR Predicted Mask")
         axes[2].axis('off')
 
         plt.tight_layout()
@@ -884,10 +887,10 @@ class DownstreamSegmentationDataset(Dataset):
                             "slice_idx": s_idx
                         })
                 except Exception as e:
-                    print(f"âš ï¸ Could not process pair: {pred_file} and {found_gt_file}. Error: {e}")
+                    print(f"⚠️ Could not process pair: {pred_file} and {found_gt_file}. Error: {e}")
 
         if not self.index_map:
-            print("âš ï¸ WARNING: No matching predicted FLAIR and ground truth WMH volumes were found. The dataset is empty.")
+            print("⚠️ WARNING: No matching predicted FLAIR and ground truth WMH volumes were found. The dataset is empty.")
 
         print(f"[DownstreamDataset] Found {len(self.index_map)} total slices from matched 3D volumes.")
 
@@ -940,6 +943,92 @@ class UNetSegmentation(nn.Module):
         d1 = self.u1(d2)
         d1 = self.d1(torch.cat([d1, e1], 1))
         return torch.sigmoid(self.out(d1))
+    
+class SwinUNetSegmentation(nn.Module):
+    def __init__(self, in_ch=1, out_ch=1, img_size=256, patch_size=4, embed_dim=96, 
+                 depths=[2, 2, 6, 2], num_heads=[3, 6, 12, 24], window_size=7):
+        super().__init__()
+        
+        # Initialize Swin Transformer backbone
+        self.backbone = timm.create_model(
+            'swin_base_patch4_window7_224',
+            pretrained=True,
+            in_chans=in_ch,
+            features_only=True,
+            img_size=img_size
+        )
+        
+        # Feature dimensions from Swin Transformer stages
+        self.feature_dims = self.backbone.feature_info.channels()
+        
+        # Decoder layers with skip connections
+        self.decoder_blocks = nn.ModuleList()
+        
+        # Build decoder blocks (reverse order of encoder features)
+        for i in range(len(self.feature_dims) - 1):
+            in_channels = self.feature_dims[-(i+1)]
+            skip_channels = self.feature_dims[-(i+2)]
+            out_channels = self.feature_dims[-(i+2)] // 2
+            
+            self.decoder_blocks.append(
+                DecoderBlock(in_channels, skip_channels, out_channels)
+            )
+        
+        # Final convolution to get the output
+        self.final_conv = nn.Conv2d(self.feature_dims[0] // 2, out_ch, kernel_size=1)
+        
+    def forward(self, x):
+        # Encoder pathway (Swin Transformer)
+        features = self.backbone(x)
+        
+        # Reverse features for decoder (from deepest to shallowest)
+        features = features[::-1]
+        
+        # Decoder pathway with skip connections
+        x = features[0]  # Start with deepest feature
+        
+        for i, decoder_block in enumerate(self.decoder_blocks):
+            skip = features[i + 1] if i + 1 < len(features) else None
+            x = decoder_block(x, skip)
+        
+        # Final convolution
+        x = self.final_conv(x)
+        
+        # Upsample to original size if needed
+        if x.shape[-2:] != x.shape[-2:]:
+            x = F.interpolate(x, size=x.shape[-2:], mode='bilinear', align_corners=False)
+        
+        return torch.sigmoid(x)
+
+class DecoderBlock(nn.Module):
+    def __init__(self, in_channels, skip_channels, out_channels):
+        super().__init__()
+        
+        self.up = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2)
+        
+        # Double convolution block
+        self.conv_block = nn.Sequential(
+            nn.Conv2d(out_channels + skip_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.BatchNorm2d(out_channels),
+            nn.ReLU(inplace=True)
+        )
+        
+    def forward(self, x, skip=None):
+        x = self.up(x)
+        
+        if skip is not None:
+            # Ensure spatial dimensions match
+            if x.shape[-2:] != skip.shape[-2:]:
+                x = F.interpolate(x, size=skip.shape[-2:], mode='bilinear', align_corners=False)
+            
+            # Concatenate with skip connection
+            x = torch.cat([x, skip], dim=1)
+        
+        x = self.conv_block(x)
+        return x
 
 
 def dice_loss(pred, gt, eps=1e-6):
@@ -967,13 +1056,13 @@ def train_segmentation(model, loader, opt, device):
 def run_stage2_segmentation(pred_flair_dir, wmh_gt_dir, device):
     ds = DownstreamSegmentationDataset(pred_flair_dir, wmh_gt_dir)
     dl = DataLoader(ds, batch_size=4, shuffle=True)
-    model = UNetSegmentation().to(device)
+    model = SwinUNetSegmentation().to(device)
     opt = torch.optim.Adam(model.parameters(), lr=1e-4)
     for ep in range(10):
         loss = train_segmentation(model, dl, opt, device)
         print(f"[Stage2] Epoch {ep+1}: loss={loss:.4f}")
-    torch.save(model.state_dict(), "wmh_segmentation_unet.pth")
-    print("[Stage2] Segmentation model saved as wmh_segmentation_unet.pth")
+    torch.save(model.state_dict(), "wmh_segmentation_swin_unet.pth")
+    print("[Stage2] Segmentation model saved as wmh_segmentation_swin_unet.pth")
 
     # --- Evaluate basic volume progression ---
     model.eval()
@@ -986,24 +1075,198 @@ def run_stage2_segmentation(pred_flair_dir, wmh_gt_dir, device):
             vols_pred += list(compute_wmh_volume(p))
             vols_true += list(compute_wmh_volume(y))
     vols_pred, vols_true = np.array(vols_pred), np.array(vols_true)
-    print(f"[Stage2] Mean Dice={np.mean(dices):.3f} | Î”Volume={(vols_pred - vols_true).mean():.2f}Â±{(vols_pred - vols_true).std():.2f}")
+    print(f"[Stage2] Mean Dice={np.mean(dices):.3f} | Delta Volume={(vols_pred - vols_true).mean():.2f}+/-{(vols_pred - vols_true).std():.2f}")
 
     save_segmentation_sample(model, dl, device)
     print(f"[Stage2] Segmentation sample saved to segmentation_sample.png")
 
 
+def segment_3d_volume(model, volume_3d, device):
+    """
+    Segment a 3D volume slice by slice using the trained segmentation model.
+    """
+    model.eval()
+    segmented_volume = np.zeros_like(volume_3d)
+    
+    with torch.no_grad():
+        # Process each slice individually
+        for slice_idx in range(volume_3d.shape[2]):
+            # Extract and preprocess the slice
+            slice_data = volume_3d[:, :, slice_idx]
+            if slice_data.max() - slice_data.min() > 1e-8:
+                slice_data = (slice_data - slice_data.min()) / (slice_data.max() - slice_data.min())
+            
+            # Convert to tensor and add batch/channel dimensions
+            slice_tensor = torch.from_numpy(slice_data).unsqueeze(0).unsqueeze(0).float().to(device)
+            
+            # Segment the slice
+            pred_mask = model(slice_tensor)
+            pred_mask_binary = (pred_mask > 0.5).float()
+            
+            # Store the result
+            segmented_volume[:, :, slice_idx] = pred_mask_binary.squeeze().cpu().numpy()
+    
+    return segmented_volume
+
+def calculate_volume_ml(mask_volume, voxel_size_mm=(1.0, 1.0, 1.0)):
+    """
+    Calculate volume in milliliters from a binary mask volume.
+    Assumes voxel dimensions are in mm.
+    """
+    # Calculate volume in mm³
+    voxel_volume_mm3 = voxel_size_mm[0] * voxel_size_mm[1] * voxel_size_mm[2]
+    volume_mm3 = np.sum(mask_volume) * voxel_volume_mm3
+    
+    # Convert to ml (1 ml = 1000 mm³)
+    volume_ml = volume_mm3 / 1000.0
+    
+    return volume_ml
+
+def get_ground_truth_wmh_volume(wmh_dir, patient_id):
+    """
+    Load ground truth WMH volume for a specific patient.
+    """
+    # Construct the expected filename pattern
+    patient_pattern = f"LBC36{patient_id}*.nii.gz"
+    
+    # Find matching files
+    matching_files = []
+    for file in os.listdir(wmh_dir):
+        if file.startswith(f"LBC36{patient_id}") and file.endswith('.nii.gz'):
+            matching_files.append(file)
+    
+    if not matching_files:
+        print(f"⚠️ No ground truth WMH found for patient {patient_id} in {wmh_dir}")
+        return None
+    
+    # Use the first matching file
+    wmh_path = os.path.join(wmh_dir, matching_files[0])
+    
+    try:
+        wmh_volume = nib.load(wmh_path).get_fdata(dtype=np.float32)
+        return wmh_volume
+    except Exception as e:
+        print(f"⚠️ Could not load ground truth WMH for patient {patient_id}: {e}")
+        return None
+
+def analyze_wmh_volume_progression(predicted_flair_dir_3d, gt_wmh_dirs, time_points, device):
+    """
+    Analyze WMH volume progression across different time points
+    
+    predicted_flair_dir_3d: Directory with predicted 3D FLAIR volumes
+    gt_wmh_dirs: Dictionary mapping time points to ground truth WMH directories
+    time_points: List of time points to analyze (e.g., ['Scan1Wave2', 'Scan2Wave3', ...])
+    """
+    
+    volume_results = {}
+    
+    # Load segmentation model (trained in Stage 2)
+    seg_model = SwinUNetSegmentation().to(device)
+    if os.path.exists("wmh_segmentation_swin_unet.pth"):
+        seg_model.load_state_dict(torch.load("wmh_segmentation_swin_unet.pth", map_location=device))
+        print("✅ Loaded trained segmentation model for volume analysis")
+    else:
+        print("⚠️ No trained segmentation model found. Using untrained model for volume analysis.")
+    
+    seg_model.eval()
+    
+    # Process each patient
+    for pred_file in os.listdir(predicted_flair_dir_3d):
+        if not pred_file.endswith('_predicted_3D.nii.gz'):
+            continue
+            
+        # Extract patient ID
+        match = re.match(r"(\d+)_predicted_3D\.nii\.gz", pred_file)
+        if not match:
+            continue
+            
+        patient_id = match.group(1)
+        print(f"📊 Analyzing WMH volume progression for patient {patient_id}")
+        
+        patient_volumes = {'predicted': [], 'ground_truth': [], 'time_points': []}
+        
+        # Process each time point
+        for time_point in time_points:
+            # 1. Process predicted FLAIR at this time point
+            pred_flair_path = os.path.join(predicted_flair_dir_3d, pred_file)
+            
+            try:
+                pred_flair_volume = nib.load(pred_flair_path).get_fdata(dtype=np.float32)
+                
+                # Segment WMH from predicted FLAIR
+                pred_wmh_volume = segment_3d_volume(seg_model, pred_flair_volume, device)
+                pred_wmh_ml = calculate_volume_ml(pred_wmh_volume)
+                
+                # 2. Get ground truth WMH for this time point
+                gt_wmh_volume = get_ground_truth_wmh_volume(gt_wmh_dirs[time_point], patient_id)
+                gt_wmh_ml = calculate_volume_ml(gt_wmh_volume) if gt_wmh_volume is not None else 0
+                
+                patient_volumes['predicted'].append(pred_wmh_ml)
+                patient_volumes['ground_truth'].append(gt_wmh_ml)
+                patient_volumes['time_points'].append(time_point)
+                
+                print(f"   {time_point}: Predicted={pred_wmh_ml:.2f}ml, Ground Truth={gt_wmh_ml:.2f}ml")
+                
+            except Exception as e:
+                print(f"⚠️ Error processing {time_point} for patient {patient_id}: {e}")
+                continue
+        
+        volume_results[patient_id] = patient_volumes
+    
+    return volume_results
+
+def plot_volume_progression(volume_results, save_path="volume_progression.png"):
+    """Plot WMH volume progression for all patients"""
+    if not volume_results:
+        print("⚠️ No volume results to plot")
+        return
+    
+    plt.figure(figsize=(12, 8))
+    
+    for patient_id, volumes in volume_results.items():
+        time_points = volumes['time_points']
+        pred_volumes = volumes['predicted']
+        gt_volumes = volumes['ground_truth']
+        
+        # Convert time points to numeric values for plotting
+        time_numeric = [i for i in range(len(time_points))]
+        
+        plt.subplot(2, 1, 1)
+        plt.plot(time_numeric, pred_volumes, 'o-', label=f'Patient {patient_id} (Predicted)')
+        plt.subplot(2, 1, 2) 
+        plt.plot(time_numeric, gt_volumes, 's-', label=f'Patient {patient_id} (Ground Truth)')
+    
+    plt.subplot(2, 1, 1)
+    plt.title('Predicted WMH Volume Progression')
+    plt.xlabel('Time Point')
+    plt.ylabel('WMH Volume (ml)')
+    plt.xticks(range(len(time_points)), time_points, rotation=45)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    plt.subplot(2, 1, 2)
+    plt.title('Ground Truth WMH Volume Progression') 
+    plt.xlabel('Time Point')
+    plt.ylabel('WMH Volume (ml)')
+    plt.xticks(range(len(time_points)), time_points, rotation=45)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+    print(f"📈 Volume progression plot saved to {save_path}")
 
 # ============================================================
 # === AUTO-LAUNCH STAGE 2 AFTER IMAGEFLOWNET TRAINING ========
 # ============================================================
-
 if __name__ == '__main__':
     # Stage 1 runs and returns the base directory name for the best predictions
     best_pred_base_dir, best_gt_dir = main()
 
     # Check if Stage 1 ran successfully
     if best_pred_base_dir and best_gt_dir:
-        print("\n" + "="*60)
+        print("="*60)
         print("Starting Stage 2 (WMH Segmentation) on best model's 3D output...")
         print("="*60)
 
@@ -1013,7 +1276,70 @@ if __name__ == '__main__':
         print(f"[Stage 2] Using ground truth 3D WMH from: {best_gt_dir}")
 
         if os.path.exists(predicted_flair_dir_3d) and os.path.exists(best_gt_dir):
+            # Run Stage 2 segmentation first
             run_stage2_segmentation(predicted_flair_dir_3d, best_gt_dir, DEVICE)
+            
+            # Then perform volumetric progression analysis
+            print("="*60)
+            print("Performing WMH Volume Progression Analysis")
+            print("="*60)
+            
+            time_points_to_analyze = ['Scan1Wave2', 'Scan2Wave3', 'Scan3Wave4', 'Scan4Wave5']
+            gt_wmh_dirs = {
+                'Scan1Wave2': os.path.join(ROOT_DIR, "Scan1Wave2_WMH"),
+                'Scan2Wave3': os.path.join(ROOT_DIR, "Scan2Wave3_WMH"), 
+                'Scan3Wave4': os.path.join(ROOT_DIR, "Scan3Wave4_WMH"),
+                'Scan4Wave5': os.path.join(ROOT_DIR, "Scan4Wave5_WMH")
+            }
+            
+            # Check if all required directories exist
+            missing_dirs = []
+            for time_point, dir_path in gt_wmh_dirs.items():
+                if not os.path.exists(dir_path):
+                    missing_dirs.append(f"{time_point}: {dir_path}")
+            
+            if missing_dirs:
+                print("⚠️ Missing ground truth directories:")
+                for missing in missing_dirs:
+                    print(f"   - {missing}")
+                print("Skipping volumetric analysis.")
+            else:
+                volume_results = analyze_wmh_volume_progression(
+                    predicted_flair_dir_3d, 
+                    gt_wmh_dirs, 
+                    time_points_to_analyze,
+                    DEVICE
+                )
+                
+                if volume_results:
+                    # Plot the results
+                    plot_volume_progression(volume_results)
+                    
+                    # Save quantitative results to CSV
+                    df_results = []
+                    for patient_id, volumes in volume_results.items():
+                        for i, time_point in enumerate(volumes['time_points']):
+                            df_results.append({
+                                'patient_id': patient_id,
+                                'time_point': time_point,
+                                'predicted_wmh_ml': volumes['predicted'][i],
+                                'ground_truth_wmh_ml': volumes['ground_truth'][i],
+                                'volume_error_ml': volumes['predicted'][i] - volumes['ground_truth'][i]
+                            })
+                    
+                    df = pd.DataFrame(df_results)
+                    df.to_csv('wmh_volume_progression_results.csv', index=False)
+                    print("✅ Volume progression results saved to wmh_volume_progression_results.csv")
+                    
+                    # Print summary statistics
+                    errors = [row['volume_error_ml'] for row in df_results]
+                    if errors:
+                        print(f"📊 Volume Analysis Summary:")
+                        print(f"   Mean Error: {np.mean(errors):.2f} +/- {np.std(errors):.2f} ml")
+                        print(f"   Min Error: {np.min(errors):.2f} ml")
+                        print(f"   Max Error: {np.max(errors):.2f} ml")
+                else:
+                    print("⚠️ No volume results generated")
         else:
             print("[Stage 2] Skipped. Could not find the required 3D prediction directory or GT directory.")
             if not os.path.exists(predicted_flair_dir_3d):
@@ -1021,4 +1347,4 @@ if __name__ == '__main__':
             if not os.path.exists(best_gt_dir):
                  print(f"  -> Missing: {best_gt_dir}")
     else:
-        print("\n[Stage 2] Skipped because Stage 1 did not complete successfully.")
+        print("[Stage 2] Skipped because Stage 1 did not complete successfully.")
