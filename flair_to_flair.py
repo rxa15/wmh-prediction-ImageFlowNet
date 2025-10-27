@@ -822,7 +822,7 @@ def main():
     )
 
     # Load fold assignments from CSV
-    fold_csv = "patients_5fold.csv"
+    fold_csv = "train_val_5fold.csv"
     if not os.path.exists(fold_csv):
         raise FileNotFoundError(f"Fold CSV not found at {fold_csv}. Please provide it.")
     folds_dict = load_folds_from_csv(fold_csv)
