@@ -76,7 +76,7 @@ def get_train_transforms():
                 prob=0.5,
                 rotate_range=(0.1, 0.1, 0.1),  # radians (~5.7 degrees)
                 scale_range=(0.1, 0.1, 0.1),   # ±10% scale
-                mode=("trilinear", "nearest"),
+                mode=("nearest"),
                 padding_mode="border",
             ),
             RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=[0, 1, 2]),
@@ -340,8 +340,8 @@ class FLAIREvolutionDataset(Dataset):
         }
 
 # --- Configuration ---
-ROOT_DIR = "/app/dataset/LBC1936"
-BATCH_SIZE = 64
+ROOT_DIR = "/app/dataset/LBC1936-FLAIR-WMH"
+BATCH_SIZE = 8
 LEARNING_RATE = 1e-4
 NUM_EPOCHS = 50
 MAX_SLICES = 48
