@@ -1,24 +1,39 @@
 # -*- coding: utf-8 -*-
 
+# === Standard Library Imports ===
+import itertools
 import os
-import torch
-import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader, Subset
+import re
+from collections import defaultdict
+
+# === Third-Party Imports ===
+import matplotlib.pyplot as plt
 import nibabel as nib
 import numpy as np
-from collections import defaultdict
-import itertools
-from tqdm import tqdm
-import torchmetrics
-import matplotlib.pyplot as plt
-from ImageFlowNet.src.nn.imageflownet_ode import ImageFlowNetODE
-from torch_ema import ExponentialMovingAverage
-from torch.optim.lr_scheduler import _LRScheduler
 import pandas as pd
-import re
-import random
-import timm
+import torch
+torch.cuda.empty_cache()
+import torch.nn as nn
 import torch.nn.functional as F
+import torchmetrics
+from torch.optim.lr_scheduler import _LRScheduler
+from torch.utils.data import Dataset, DataLoader, Subset
+from torch_ema import ExponentialMovingAverage
+from tqdm import tqdm
+
+# === MONAI Imports (Medical Imaging) ===
+from monai.networks.nets import SwinUNETR
+from monai.transforms import (
+    Compose,
+    RandAffined,
+    RandFlipd,
+    RandGaussianNoised,
+    RandScaleIntensityd,
+    RandShiftIntensityd,
+)
+
+# === Local Imports ===
+from ImageFlowNet.src.nn.imageflownet_ode import ImageFlowNetODE
 
 
 class LinearWarmupCosineAnnealingLR(_LRScheduler):
@@ -47,6 +62,35 @@ def neg_cos_sim(p: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
     p = torch.nn.functional.normalize(p, p=2, dim=1)  # L2-normalize
     z = torch.nn.functional.normalize(z, p=2, dim=1)  # L2-normalize
     return -(p * z).sum(dim=1).mean()
+
+# --- 3D Augmentation Transforms ---
+def get_train_transforms():
+    """
+    Returns a composition of 3D MONAI augmentations to be applied to full volumes.
+    These augmentations work on 3D data before slicing occurs.
+    """
+    return Compose(
+        transforms=[
+            RandAffined(
+                keys=["image", "label"],
+                prob=0.5,
+                rotate_range=(0.1, 0.1, 0.1),  # radians (~5.7 degrees)
+                scale_range=(0.1, 0.1, 0.1),   # ±10% scale
+                mode=("trilinear", "nearest"),
+                padding_mode="border",
+            ),
+            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=[0, 1, 2]),
+            RandScaleIntensityd(keys=["image"], factors=0.1, prob=0.5),
+            RandShiftIntensityd(keys=["image"], offsets=0.1, prob=0.5),
+            RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.01),
+        ],
+    )
+
+def get_val_transforms():
+    """
+    Returns minimal transforms for validation (no augmentation, only compatibility).
+    """
+    return Compose(transforms=[])
 
 # --- Loss and Metric Classes ---
 # NOTE: DiceLoss isn't used for training anymore, but kept for reference. MSE is used instead.
@@ -93,13 +137,27 @@ class FLAIREvolutionDataset(Dataset):
     Custom dataset for LBC1936 folder structure where each folder encodes a scan pair:
     e.g., Scan1Wave2_FLAIR_brain, Scan1Wave2_WMH, Scan2Wave3_FLAIR_brain, Scan2Wave3_WMH, etc.
     Each folder contains patient .nii/.nii.gz files.
+    
+    Supports 3D augmentations on full volumes before slicing.
     """
-    def __init__(self, root_dir, transform=None, max_slices_per_patient=None, use_wmh=False):
+    def __init__(self, root_dir, transform=None, max_slices_per_patient=None, use_wmh=False, apply_3d_augmentation=False):
         self.root_dir = root_dir
         self.transform = transform
         self.use_wmh = use_wmh
+        self.apply_3d_augmentation = apply_3d_augmentation
         self.index_map = []
         self.patient_ids = set()
+        
+        # Cache for augmented volumes to improve efficiency
+        self.augmented_volume_cache = {}
+        
+        # Get augmentation transforms
+        if self.apply_3d_augmentation:
+            self.augmentation_transform = get_train_transforms()
+            print("[Dataset] 3D augmentations ENABLED for training")
+        else:
+            self.augmentation_transform = get_val_transforms()
+            print("[Dataset] 3D augmentations DISABLED")
 
         print(f"📂 Scanning folders in {root_dir} ...")
 
@@ -174,25 +232,105 @@ class FLAIREvolutionDataset(Dataset):
 
         print(f"📊 Dataset ready. Found {len(self.index_map)} slices from {len(self.patient_ids)} patients.")
 
-    def _load_slice(self, file_path, slice_idx):
-        vol = nib.load(file_path).get_fdata(dtype=np.float32)
+    def _apply_3d_augmentations(self, flair_vol, wmh_vol):
+        """
+        Apply 3D augmentations to full volumes using MONAI transforms.
+        
+        Args:
+            flair_vol: 3D FLAIR volume of shape (H, W, D)
+            wmh_vol: 3D WMH volume of shape (H, W, D)
+            
+        Returns:
+            Augmented flair_vol and wmh_vol (as numpy arrays)
+        """
+        # Convert to format expected by MONAI: (1, H, W, D) for single channel, or (C, H, W, D)
+        flair_vol_aug = flair_vol[np.newaxis, ...]  # (1, H, W, D)
+        wmh_vol_aug = wmh_vol[np.newaxis, ...]      # (1, H, W, D)
+        
+        # Prepare data dict for augmentation
+        data_dict = {
+            "image": flair_vol_aug,
+            "label": wmh_vol_aug,
+        }
+        
+        # Apply augmentations
+        try:
+            data_dict = self.augmentation_transform(data_dict)
+            # Convert MetaTensor back to numpy array
+            # Use .numpy() method for MetaTensor to avoid deprecation warnings
+            flair_vol_aug = data_dict["image"][0].numpy() if hasattr(data_dict["image"][0], 'numpy') else np.array(data_dict["image"][0])
+            wmh_vol_aug = data_dict["label"][0].numpy() if hasattr(data_dict["label"][0], 'numpy') else np.array(data_dict["label"][0])
+        except Exception as e:
+            print(f"⚠️ Augmentation failed: {e}. Using original volumes.")
+            flair_vol_aug = flair_vol
+            wmh_vol_aug = wmh_vol
+        
+        return flair_vol_aug, wmh_vol_aug
+
+    def _load_slice(self, file_path, slice_idx, apply_augmentation=False):
+        """Helper to load a single slice from a 3D NIfTI file."""
+        cache_key = f"{file_path}_{apply_augmentation}"
+        
+        # Load volume (possibly from cache if augmented)
+        if cache_key not in self.augmented_volume_cache:
+            vol = nib.load(file_path).get_fdata(dtype=np.float32)
+            
+            # Apply 3D augmentations if requested
+            if apply_augmentation and self.apply_3d_augmentation:
+                # For augmentation, we need both FLAIR and WMH volumes
+                # This will be handled in __getitem__
+                pass
+            
+            self.augmented_volume_cache[cache_key] = vol
+        else:
+            vol = self.augmented_volume_cache[cache_key]
+        
+        # Extract slice
         img_slice = vol[:, :, slice_idx]
+        
+        # Normalize slice to [0, 1] range
         if img_slice.max() - img_slice.min() > 1e-8:
             img_slice = (img_slice - img_slice.min()) / (img_slice.max() - img_slice.min())
-        return torch.from_numpy(img_slice).unsqueeze(0)  # [1,H,W]
+        
+        return torch.from_numpy(img_slice).unsqueeze(0)  # [1, H, W]
 
     def __len__(self):
         return len(self.index_map)
 
     def __getitem__(self, idx):
         info = self.index_map[idx]
-        flair_slice = self._load_slice(info["flair_path"], info["slice_idx"])
-        if self.use_wmh and info["wmh_path"]:
-            wmh_slice = self._load_slice(info["wmh_path"], info["slice_idx"])
+        flair_path = info["flair_path"]
+        wmh_path = info["wmh_path"]
+        s_idx = info["slice_idx"]
+        
+        # Load full volumes
+        flair_vol = nib.load(flair_path).get_fdata(dtype=np.float32)
+        if wmh_path:
+            wmh_vol = nib.load(wmh_path).get_fdata(dtype=np.float32)
         else:
-            wmh_slice = torch.zeros_like(flair_slice)
+            wmh_vol = np.zeros_like(flair_vol)
+        
+        # Apply 3D augmentations if enabled
+        if self.apply_3d_augmentation:
+            flair_vol, wmh_vol = self._apply_3d_augmentations(flair_vol, wmh_vol)
+        
+        # Extract slice from (possibly augmented) volume
+        flair_slice = flair_vol[:, :, s_idx]
+        wmh_slice = wmh_vol[:, :, s_idx]
+        
+        # Normalize slices independently to [0, 1]
+        if flair_slice.max() - flair_slice.min() > 1e-8:
+            flair_slice = (flair_slice - flair_slice.min()) / (flair_slice.max() - flair_slice.min())
+        if wmh_slice.max() - wmh_slice.min() > 1e-8:
+            wmh_slice = (wmh_slice - wmh_slice.min()) / (wmh_slice.max() - wmh_slice.min())
+        
+        # Convert to tensors
+        flair_slice = torch.from_numpy(flair_slice).unsqueeze(0)  # [1, H, W]
+        wmh_slice = torch.from_numpy(wmh_slice).unsqueeze(0)      # [1, H, W]
+        
         # Combine as multi-channel [FLAIR, WMH]
-        source_img = torch.cat([flair_slice, wmh_slice], dim=0)
+        source_img = torch.cat([flair_slice, wmh_slice], dim=0)  # [2, H, W]
+        
         return {
             "source_image": source_img,
             "target_image": source_img,  # target = same FLAIR for now, modified later in pipeline
@@ -203,17 +341,17 @@ class FLAIREvolutionDataset(Dataset):
 
 # --- Configuration ---
 ROOT_DIR = "/app/dataset/LBC1936"
-BATCH_SIZE = 2
+BATCH_SIZE = 64
 LEARNING_RATE = 1e-4
-NUM_EPOCHS = 10
+NUM_EPOCHS = 50
 MAX_SLICES = 48
 MAX_PATIENTS_PER_FOLD = 5
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 RECON_PSNR_THR = 25.0  # PSNR threshold to start training the ODE component
 CONTRASTIVE_COEFF = 0.1 # Weight for the contrastive loss term
-CV_FOLDS = [1, 2, 3, 4] # Folds to use for cross-validation
-TEST_FOLD = 5           # The single, held-out test fold
-K_FOLDS = len(CV_FOLDS) # The number of models we will train
+CV_FOLDS = [1]  # Folds to use for cross-validation (single fold)
+TEST_FOLD = 2   # The single, held-out test fold
+K_FOLDS = len(CV_FOLDS)  # The number of models we will train (will be 1)
 
 print(f"Using device: {DEVICE}")
 
@@ -669,7 +807,19 @@ def load_folds_from_csv(fold_csv_path):
 # Main logic
 def main():
     print("Initializing dataset...")
-    full_dataset = FLAIREvolutionDataset(root_dir=ROOT_DIR, max_slices_per_patient=MAX_SLICES)
+    # Create training dataset WITH 3D augmentations
+    train_dataset = FLAIREvolutionDataset(
+        root_dir=ROOT_DIR, 
+        max_slices_per_patient=MAX_SLICES,
+        apply_3d_augmentation=True  # Enable augmentations for training
+    )
+    
+    # Create validation dataset WITHOUT 3D augmentations
+    val_dataset = FLAIREvolutionDataset(
+        root_dir=ROOT_DIR, 
+        max_slices_per_patient=MAX_SLICES,
+        apply_3d_augmentation=False  # Disable augmentations for validation
+    )
 
     # Load fold assignments from CSV
     fold_csv = "patients_5fold.csv"
@@ -677,7 +827,7 @@ def main():
         raise FileNotFoundError(f"Fold CSV not found at {fold_csv}. Please provide it.")
     folds_dict = load_folds_from_csv(fold_csv)
     print(f"Loaded patient folds from {fold_csv}.")
-    print(f"Example dataset patient IDs: {list(full_dataset.patient_ids)[:5]}")
+    print(f"Example dataset patient IDs: {list(train_dataset.patient_ids)[:5]}")
 
     # --- 1. K-Fold Cross-Validation Training ---
     print(f"\n" + "="*50 + f"\n📈 Starting {K_FOLDS}-Fold Cross-Validation Training..." + "\n" + "="*50)
@@ -686,25 +836,32 @@ def main():
         print(f"\n" + "="*50 + f"\n K-Fold Run: Validating on Fold {val_fold_idx} " + "\n" + "="*50)
 
         # --- Define splits for this specific run ---
-        val_pids = folds_dict[val_fold_idx][:MAX_PATIENTS_PER_FOLD]
+        if K_FOLDS == 1:
+            # For single fold, split the fold into train (80%) and validation (20%)
+            fold_pids = folds_dict[val_fold_idx][:MAX_PATIENTS_PER_FOLD]
+            split_point = int(0.8 * len(fold_pids))
+            train_pids = fold_pids[:split_point]
+            val_pids = fold_pids[split_point:]
+            print(f"[Single Fold Mode] Splitting fold {val_fold_idx} into train/val (80/20)")
+        else:
+            # Original multi-fold logic: validate on one fold, train on others
+            val_pids = folds_dict[val_fold_idx][:MAX_PATIENTS_PER_FOLD]
+            train_pids = [
+                pid for f_idx in CV_FOLDS if f_idx != val_fold_idx 
+                for pid in folds_dict[f_idx]
+            ][:MAX_PATIENTS_PER_FOLD * (K_FOLDS - 1)]
         
-        # Train on all OTHER CV folds
-        train_pids = [
-            pid for f_idx in CV_FOLDS if f_idx != val_fold_idx 
-            for pid in folds_dict[f_idx]
-        ][:MAX_PATIENTS_PER_FOLD * (K_FOLDS - 1)]
         print(f"Example train_pids (Fold {val_fold_idx}): {train_pids[:5]}")
-
         print(f"Training patients:   {len(train_pids)}")
         print(f"Validation patients: {len(val_pids)}")
 
         # Create dataset indices
-        train_indices = [i for i, item in enumerate(full_dataset.index_map) if item['patient_id'] in set(train_pids)]
-        val_indices   = [i for i, item in enumerate(full_dataset.index_map) if item['patient_id'] in set(val_pids)]
+        train_indices = [i for i, item in enumerate(train_dataset.index_map) if item['patient_id'] in set(train_pids)]
+        val_indices   = [i for i, item in enumerate(val_dataset.index_map) if item['patient_id'] in set(val_pids)]
 
         # Create DataLoaders
-        train_loader = DataLoader(Subset(full_dataset, train_indices), batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
-        val_loader   = DataLoader(Subset(full_dataset, val_indices),   batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
+        train_loader = DataLoader(Subset(train_dataset, train_indices), batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
+        val_loader   = DataLoader(Subset(val_dataset, val_indices),   batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
 
         # --- Initialize a new model for this fold ---
         model = ImageFlowNetODE(device=DEVICE, in_channels=2, ode_location='bottleneck', contrastive=True).to(DEVICE)
@@ -747,17 +904,17 @@ def main():
     # --- 2. Final Evaluation on the Held-Out Test Set ---
     print("\n" + "="*60 + "\n✅ CV Training Complete. Starting Final Evaluation on Held-Out Test Set." + "\n" + "="*60)
     
-    # Define the single, held-out test set
+    # Define the single, held-out test set (using val_dataset without augmentation)
     test_pids = folds_dict[TEST_FOLD][:MAX_PATIENTS_PER_FOLD]
-    test_indices = [i for i, item in enumerate(full_dataset.index_map) if item['patient_id'] in set(test_pids)]
+    test_indices = [i for i, item in enumerate(val_dataset.index_map) if item['patient_id'] in set(test_pids)]
     print(f"Using {len(test_pids)} patients from Fold {TEST_FOLD} for final testing.")
 
     # Create DataLoaders for the test set
-    source_loader = DataLoader(Subset(full_dataset, [i for i in test_indices if full_dataset.index_map[i]['scan_pair'] == "Scan1Wave2"]), batch_size=BATCH_SIZE, shuffle=False)
+    source_loader = DataLoader(Subset(val_dataset, [i for i in test_indices if val_dataset.index_map[i]['scan_pair'] == "Scan1Wave2"]), batch_size=BATCH_SIZE, shuffle=False)
     gt_loaders = {
-        "Scan2Wave3": DataLoader(Subset(full_dataset, [i for i in test_indices if full_dataset.index_map[i]['scan_pair'] == "Scan2Wave3"]), batch_size=BATCH_SIZE, shuffle=False),
-        "Scan3Wave4": DataLoader(Subset(full_dataset, [i for i in test_indices if full_dataset.index_map[i]['scan_pair'] == "Scan3Wave4"]), batch_size=BATCH_SIZE, shuffle=False),
-        "Scan4Wave5": DataLoader(Subset(full_dataset, [i for i in test_indices if full_dataset.index_map[i]['scan_pair'] == "Scan4Wave5"]), batch_size=BATCH_SIZE, shuffle=False),
+        "Scan2Wave3": DataLoader(Subset(val_dataset, [i for i in test_indices if val_dataset.index_map[i]['scan_pair'] == "Scan2Wave3"]), batch_size=BATCH_SIZE, shuffle=False),
+        "Scan3Wave4": DataLoader(Subset(val_dataset, [i for i in test_indices if val_dataset.index_map[i]['scan_pair'] == "Scan3Wave4"]), batch_size=BATCH_SIZE, shuffle=False),
+        "Scan4Wave5": DataLoader(Subset(val_dataset, [i for i in test_indices if val_dataset.index_map[i]['scan_pair'] == "Scan4Wave5"]), batch_size=BATCH_SIZE, shuffle=False),
     }
 
     # Evaluate ALL models trained during cross-validation
@@ -943,92 +1100,49 @@ class UNetSegmentation(nn.Module):
         d1 = self.u1(d2)
         d1 = self.d1(torch.cat([d1, e1], 1))
         return torch.sigmoid(self.out(d1))
-    
+
+
 class SwinUNetSegmentation(nn.Module):
-    def __init__(self, in_ch=1, out_ch=1, img_size=256, patch_size=4, embed_dim=96, 
-                 depths=[2, 2, 6, 2], num_heads=[3, 6, 12, 24], window_size=7):
+    """
+    2D Medical Image Segmentation using MONAI's SwinUNETR.
+    
+    This wrapper adapts the 3D SwinUNETR for 2D slice-based processing.
+    The model uses a pretrained Swin Transformer backbone with a U-shaped decoder.
+    
+    Args:
+        in_channels: Number of input channels (default: 1 for grayscale FLAIR)
+        out_channels: Number of output channels (default: 1 for binary WMH mask)
+        img_size: Expected input image size (default: 256x256) - for reference only
+        feature_size: Number of feature channels in the first layer (default: 48)
+        use_checkpoint: Whether to use gradient checkpointing to save memory
+    """
+    def __init__(self, in_channels=1, out_channels=1, img_size=256, feature_size=48, use_checkpoint=False):
         super().__init__()
         
-        # Initialize Swin Transformer backbone
-        self.backbone = timm.create_model(
-            'swin_base_patch4_window7_224',
-            pretrained=True,
-            in_chans=in_ch,
-            features_only=True,
-            img_size=img_size
+        # Initialize MONAI SwinUNETR model
+        # Note: SwinUNETR in MONAI for 2D requires spatial_dims=2
+        # The model will automatically handle input tensor shapes
+        self.model = SwinUNETR(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            feature_size=feature_size,
+            use_checkpoint=use_checkpoint,
+            spatial_dims=2,  # Use 2D for 2D slice-based processing
         )
-        
-        # Feature dimensions from Swin Transformer stages
-        self.feature_dims = self.backbone.feature_info.channels()
-        
-        # Decoder layers with skip connections
-        self.decoder_blocks = nn.ModuleList()
-        
-        # Build decoder blocks (reverse order of encoder features)
-        for i in range(len(self.feature_dims) - 1):
-            in_channels = self.feature_dims[-(i+1)]
-            skip_channels = self.feature_dims[-(i+2)]
-            out_channels = self.feature_dims[-(i+2)] // 2
-            
-            self.decoder_blocks.append(
-                DecoderBlock(in_channels, skip_channels, out_channels)
-            )
-        
-        # Final convolution to get the output
-        self.final_conv = nn.Conv2d(self.feature_dims[0] // 2, out_ch, kernel_size=1)
         
     def forward(self, x):
-        # Encoder pathway (Swin Transformer)
-        features = self.backbone(x)
+        """
+        Args:
+            x: Input tensor of shape (B, C, H, W)
         
-        # Reverse features for decoder (from deepest to shallowest)
-        features = features[::-1]
+        Returns:
+            Segmentation mask of shape (B, 1, H, W) with sigmoid activation
+        """
+        # Forward pass through SwinUNETR
+        logits = self.model(x)
         
-        # Decoder pathway with skip connections
-        x = features[0]  # Start with deepest feature
-        
-        for i, decoder_block in enumerate(self.decoder_blocks):
-            skip = features[i + 1] if i + 1 < len(features) else None
-            x = decoder_block(x, skip)
-        
-        # Final convolution
-        x = self.final_conv(x)
-        
-        # Upsample to original size if needed
-        if x.shape[-2:] != x.shape[-2:]:
-            x = F.interpolate(x, size=x.shape[-2:], mode='bilinear', align_corners=False)
-        
-        return torch.sigmoid(x)
-
-class DecoderBlock(nn.Module):
-    def __init__(self, in_channels, skip_channels, out_channels):
-        super().__init__()
-        
-        self.up = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=2, stride=2)
-        
-        # Double convolution block
-        self.conv_block = nn.Sequential(
-            nn.Conv2d(out_channels + skip_channels, out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True)
-        )
-        
-    def forward(self, x, skip=None):
-        x = self.up(x)
-        
-        if skip is not None:
-            # Ensure spatial dimensions match
-            if x.shape[-2:] != skip.shape[-2:]:
-                x = F.interpolate(x, size=skip.shape[-2:], mode='bilinear', align_corners=False)
-            
-            # Concatenate with skip connection
-            x = torch.cat([x, skip], dim=1)
-        
-        x = self.conv_block(x)
-        return x
+        # Apply sigmoid activation for binary segmentation
+        return torch.sigmoid(logits)
 
 
 def dice_loss(pred, gt, eps=1e-6):
@@ -1149,11 +1263,11 @@ def get_ground_truth_wmh_volume(wmh_dir, patient_id):
         print(f"⚠️ Could not load ground truth WMH for patient {patient_id}: {e}")
         return None
 
-def analyze_wmh_volume_progression(predicted_flair_dir_3d, gt_wmh_dirs, time_points, device):
+def analyze_wmh_volume_progression(predicted_flair_base_dir, gt_wmh_dirs, time_points, device):
     """
     Analyze WMH volume progression across different time points
     
-    predicted_flair_dir_3d: Directory with predicted 3D FLAIR volumes
+    predicted_flair_base_dir: Base directory containing model predictions (e.g., 'flair-to-flair-results')
     gt_wmh_dirs: Dictionary mapping time points to ground truth WMH directories
     time_points: List of time points to analyze (e.g., ['Scan1Wave2', 'Scan2Wave3', ...])
     """
@@ -1170,25 +1284,53 @@ def analyze_wmh_volume_progression(predicted_flair_dir_3d, gt_wmh_dirs, time_poi
     
     seg_model.eval()
     
+    # Construct directory paths for each time point
+    # Pattern: flair_to_flair_model_fold_[fold]_Pred_[scan]_3D
+    pred_dirs_by_timepoint = {}
+    for time_point in time_points:
+        # Find directories matching the pattern for this time point
+        for folder in os.listdir(predicted_flair_base_dir):
+            folder_path = os.path.join(predicted_flair_base_dir, folder)
+            if os.path.isdir(folder_path) and f"Pred_{time_point}_3D" in folder:
+                pred_dirs_by_timepoint[time_point] = folder_path
+                print(f"  Found predictions for {time_point}: {folder}")
+                break
+    
+    if not pred_dirs_by_timepoint:
+        print("⚠️ No predicted FLAIR directories found for the specified time points.")
+        return volume_results
+    
+    # Identify all unique patients across all time point directories
+    all_patients = set()
+    for time_point, pred_dir in pred_dirs_by_timepoint.items():
+        for pred_file in os.listdir(pred_dir):
+            if pred_file.endswith('_predicted_3D.nii.gz'):
+                match = re.match(r"(\d+)_predicted_3D\.nii\.gz", pred_file)
+                if match:
+                    all_patients.add(match.group(1))
+    
+    print(f"Found {len(all_patients)} patients across all time points\n")
+    
     # Process each patient
-    for pred_file in os.listdir(predicted_flair_dir_3d):
-        if not pred_file.endswith('_predicted_3D.nii.gz'):
-            continue
-            
-        # Extract patient ID
-        match = re.match(r"(\d+)_predicted_3D\.nii\.gz", pred_file)
-        if not match:
-            continue
-            
-        patient_id = match.group(1)
+    for patient_id in all_patients:
         print(f"📊 Analyzing WMH volume progression for patient {patient_id}")
         
         patient_volumes = {'predicted': [], 'ground_truth': [], 'time_points': []}
         
         # Process each time point
         for time_point in time_points:
-            # 1. Process predicted FLAIR at this time point
-            pred_flair_path = os.path.join(predicted_flair_dir_3d, pred_file)
+            if time_point not in pred_dirs_by_timepoint:
+                print(f"   ⚠️ {time_point}: No directory found, skipping")
+                continue
+            
+            pred_dir = pred_dirs_by_timepoint[time_point]
+            pred_file = f"{patient_id}_predicted_3D.nii.gz"
+            pred_flair_path = os.path.join(pred_dir, pred_file)
+            
+            # Check if file exists for this patient at this time point
+            if not os.path.exists(pred_flair_path):
+                print(f"   ⚠️ {time_point}: File not found for patient {patient_id}, skipping")
+                continue
             
             try:
                 pred_flair_volume = nib.load(pred_flair_path).get_fdata(dtype=np.float32)
@@ -1211,7 +1353,10 @@ def analyze_wmh_volume_progression(predicted_flair_dir_3d, gt_wmh_dirs, time_poi
                 print(f"⚠️ Error processing {time_point} for patient {patient_id}: {e}")
                 continue
         
-        volume_results[patient_id] = patient_volumes
+        if patient_volumes['predicted']:  # Only add if we found at least one time point
+            volume_results[patient_id] = patient_volumes
+        else:
+            print(f"   ⚠️ No valid predictions found for patient {patient_id}\n")
     
     return volume_results
 
@@ -1304,8 +1449,9 @@ if __name__ == '__main__':
                     print(f"   - {missing}")
                 print("Skipping volumetric analysis.")
             else:
+                # Pass the base results directory instead of the specific _3D directory
                 volume_results = analyze_wmh_volume_progression(
-                    predicted_flair_dir_3d, 
+                    "flair-to-flair-results", 
                     gt_wmh_dirs, 
                     time_points_to_analyze,
                     DEVICE
