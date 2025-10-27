@@ -17,3 +17,4 @@ nibabel
 torchmetrics
 matplotlib
 scikit-learn
+einops
