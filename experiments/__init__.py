@@ -4,9 +4,9 @@ Experiments module for WMH Prediction using ImageFlowNet.
 Contains modular experiment definitions that can be easily added and managed.
 """
 
-from .base import BaseExperiment
-from .experiment_1 import Experiment1
-from .experiment_2 import Experiment2
+from base import BaseExperiment
+from flair_to_flair import Experiment1
+from flair_to_flair_wmh import Experiment2
 
 # Registry of available experiments
 EXPERIMENTS = {

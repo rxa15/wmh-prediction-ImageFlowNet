@@ -56,6 +56,40 @@ class BaseExperiment(ABC):
         """
         pass
     
+    def run_stage2_inference(self, pred_flair_dir, wmh_gt_dir, pretrained_model_path, time_point_label="Unknown"):
+        """
+        Run Stage 2 WMH segmentation inference using a pretrained model.
+        
+        Args:
+            pred_flair_dir: Directory containing predicted FLAIR images
+            wmh_gt_dir: Directory containing ground truth WMH masks
+            pretrained_model_path: Path to the pretrained SwinUNETR model (.pth file)
+            time_point_label: Label for the time point being evaluated
+        """
+        from .utils import run_stage2_inference_only
+        
+        print(f"\n{'='*60}")
+        print(f"🔬 Starting Stage 2 WMH Segmentation Inference")
+        print(f"{'='*60}")
+        print(f"📂 Predicted FLAIR dir: {pred_flair_dir}")
+        print(f"📂 Ground truth WMH dir: {wmh_gt_dir}")
+        print(f"🤖 Pretrained model: {pretrained_model_path}")
+        print(f"⏰ Time point: {time_point_label}")
+        
+        if not os.path.exists(pretrained_model_path):
+            print(f"❌ Error: Pretrained model not found at {pretrained_model_path}")
+            return None
+        
+        results = run_stage2_inference_only(
+            pred_flair_dir=pred_flair_dir,
+            wmh_gt_dir=wmh_gt_dir,
+            pretrained_model_path=pretrained_model_path,
+            time_point_label=time_point_label,
+            results_dir=self.results_dir
+        )
+        
+        return results
+    
     def get_model_path(self, fold_idx):
         """Get the path for saving/loading a model for a specific fold."""
         return os.path.join(self.models_dir, f"model_fold_{fold_idx}.pth")
