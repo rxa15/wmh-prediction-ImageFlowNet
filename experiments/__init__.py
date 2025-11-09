@@ -6,22 +6,22 @@ Contains modular experiment definitions that can be easily added and managed.
 
 from base import BaseExperiment
 from flair_to_flair import Experiment1
-from flair_to_flair_wmh import Experiment2
+from flair_to_flair_wmh import Experiment3
 
 # Registry of available experiments
 EXPERIMENTS = {
     1: {
         "name": "flair_to_flair",
         "use_wmh": False,
-        "description": "FLAIR → FLAIR with downstream",
+        "description": "FLAIR → FLAIR (two-stage: prediction then segmentation)",
         "class": Experiment1
     },
-    2: {
-        "name": "flair_wmh_to_flair",
+    3: {
+        "name": "flair_to_flair_wmh",
         "use_wmh": True,
-        "description": "FLAIR+WMH → FLAIR with downstream",
-        "class": Experiment2
+        "description": "FLAIR → FLAIR+WMH (joint training: single-stage prediction)",
+        "class": Experiment3
     }
 }
 
-__all__ = ["EXPERIMENTS", "BaseExperiment", "Experiment1", "Experiment2"]
+__all__ = ["EXPERIMENTS", "BaseExperiment", "Experiment1", "Experiment3"]

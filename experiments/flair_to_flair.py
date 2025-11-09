@@ -48,8 +48,11 @@ class Experiment1(BaseExperiment):
         super().__init__(experiment_number, experiment_config)
         self.config = config
 
+        # print("self.config['TEST_CSV']:", self.config["TEST_CSV"])
+        # print("self.config['TEST_CSV', None]:", self.config["TEST_CSV", None])
+
         # Load test set patient IDs
-        test_csv = self.config["TEST_CSV", None]
+        test_csv = self.config["TEST_CSV"]
         if test_csv is None or not os.path.exists(test_csv):
             raise FileNotFoundError(f"Test CSV not found at {test_csv}")
         
@@ -177,6 +180,8 @@ class Experiment1(BaseExperiment):
         history = {
             'train_recon_loss': [],
             'train_pred_loss': [],
+            'train_recon_psnr': [],   # ← added
+            'train_pred_psnr': [],    # ← added
             'val_recon_psnr': [],
             'val_pred_psnr': []
         }
@@ -511,7 +516,8 @@ if __name__ == "__main__":
     # Configuration
     CONFIG = {
         # Dataset
-        "ROOT_DIR": "/app/dataset/LBC1936",
+        # "ROOT_DIR": "/app/dataset/LBC1936",
+        "ROOT_DIR": "/disk/febrian/Edinburgh_Data/LBC1936",
         "FOLD_CSV": "train_val_5fold.csv",
         "TEST_CSV": "test_set_patients.csv",
         
