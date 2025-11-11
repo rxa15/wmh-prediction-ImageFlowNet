@@ -23,6 +23,146 @@ from torch_ema import ExponentialMovingAverage
 from ImageFlowNet.src.nn.imageflownet_ode import ImageFlowNetODE
 from monai.networks.nets import SwinUNETR
 
+import torch
+from torch import nn
+
+class BinaryDice(nn.Module):
+    """
+    Drop-in replacement for torchmetrics.classification.BinaryDice.
+    Computes Dice coefficient for binary predictions.
+    Supports `.update(preds, targets)` and `.compute()` for accumulated batches.
+    
+    Key improvements:
+    - **Skips empty-empty cases** (both pred and GT are empty) from main Dice calculation
+    - **Tracks false positives on empty slices** separately as FP rate
+    - Accumulates intersection and cardinality across ALL batches (not per-batch averaging)
+    - Properly handles probabilities with thresholding
+    
+    Usage:
+        dice_metric = BinaryDice(threshold=0.5)
+        dice_metric.update(preds, targets)
+        dice_score = dice_metric.compute()  # Main Dice (skips empty-empty)
+        fp_rate = dice_metric.compute_fp_rate()  # False positive rate on empty GT
+        stats = dice_metric.get_stats()  # Detailed statistics
+    """
+
+    def __init__(self, threshold: float = 0.5, eps: float = 1e-7):
+        super().__init__()
+        self.threshold = threshold
+        self.eps = eps
+        self.reset()
+
+    def update(self, preds: torch.Tensor, targets: torch.Tensor):
+        """
+        Accumulate Dice components for one batch.
+        Args:
+            preds (torch.Tensor): Predicted probabilities (N, 1, H, W) - AFTER sigmoid
+            targets (torch.Tensor): Binary ground truth masks (N, 1, H, W)
+        """
+        if preds.shape != targets.shape:
+            raise ValueError(f"Shape mismatch: preds {preds.shape}, targets {targets.shape}")
+
+        # Threshold probabilities to get binary predictions
+        preds_bin = (preds > self.threshold).float()
+        targets_bin = (targets > 0.5).float()
+
+        # Process each sample separately to track empty cases
+        batch_size = preds.shape[0]
+        for i in range(batch_size):
+            pred_sample = preds_bin[i]
+            target_sample = targets_bin[i]
+            
+            pred_has_fg = pred_sample.sum() > 0
+            target_has_fg = target_sample.sum() > 0
+            
+            # Case 1: Both empty (skip from main Dice, track separately)
+            if not pred_has_fg and not target_has_fg:
+                self.empty_empty_count += 1
+                continue
+            
+            # Case 2: GT empty but pred has WMH (false positive on empty slice)
+            if pred_has_fg and not target_has_fg:
+                self.empty_gt_with_pred_count += 1
+                self.fp_pred_volume += pred_sample.sum().item()
+            
+            # Case 3: At least one has foreground - include in Dice calculation
+            if pred_has_fg or target_has_fg:
+                intersection = (pred_sample * target_sample).sum()
+                pred_cardinality = pred_sample.sum()
+                target_cardinality = target_sample.sum()
+                
+                self.intersection_sum += intersection.item()
+                self.preds_card_sum += pred_cardinality.item()
+                self.targets_card_sum += target_cardinality.item()
+                self.valid_sample_count += 1
+
+    def compute(self):
+        """
+        Return the mean Dice coefficient across non-empty samples.
+        
+        This is your PRIMARY metric for model selection.
+        Empty-empty cases are excluded (as they don't provide useful signal).
+        
+        Returns 0.0 if no valid samples were found.
+        """
+        if self.valid_sample_count == 0:
+            # No valid samples (only empty-empty cases or nothing at all)
+            return torch.tensor(0.0, dtype=torch.float32)
+        
+        union = self.preds_card_sum + self.targets_card_sum
+        
+        if union == 0:
+            # Should not happen if valid_sample_count > 0, but safety check
+            return torch.tensor(0.0, dtype=torch.float32)
+        
+        dice = (2.0 * self.intersection_sum + self.eps) / (union + self.eps)
+        return torch.tensor(dice, dtype=torch.float32)
+    
+    def compute_fp_rate(self):
+        """
+        Return the false positive rate on empty ground truth slices.
+        
+        This is your COMPANION metric to check for hallucinations.
+        
+        FP Rate = (# of empty GT slices where pred has WMH) / (# of empty GT slices)
+        
+        Returns 0.0 if there are no empty GT cases.
+        """
+        total_empty_gt = self.empty_empty_count + self.empty_gt_with_pred_count
+        
+        if total_empty_gt == 0:
+            return torch.tensor(0.0, dtype=torch.float32)
+        
+        fp_rate = self.empty_gt_with_pred_count / total_empty_gt
+        return torch.tensor(fp_rate, dtype=torch.float32)
+    
+    def get_stats(self):
+        """
+        Return detailed statistics for analysis.
+        
+        Useful for debugging and understanding model behavior.
+        """
+        return {
+            'valid_samples': self.valid_sample_count,  # Samples with at least one foreground
+            'empty_empty': self.empty_empty_count,  # Both pred and GT empty (skipped)
+            'false_positives': self.empty_gt_with_pred_count,  # GT empty but pred has WMH
+            'fp_volume': self.fp_pred_volume,  # Total volume of false positive predictions
+            'dice': self.compute().item(),
+            'fp_rate': self.compute_fp_rate().item()
+        }
+
+    def reset(self):
+        """Reset accumulated statistics."""
+        # Dice computation (only non-empty cases)
+        self.intersection_sum = 0.0
+        self.preds_card_sum = 0.0
+        self.targets_card_sum = 0.0
+        self.valid_sample_count = 0  # Samples with at least one foreground
+        
+        # Empty case tracking
+        self.empty_empty_count = 0  # Both pred and GT are empty
+        self.empty_gt_with_pred_count = 0  # GT empty, but pred has WMH (false positive)
+        self.fp_pred_volume = 0.0  # Total predicted volume on empty GT
 
 # ============================================================
 # === LEARNING RATE SCHEDULER ===
@@ -62,11 +202,22 @@ def neg_cos_sim(p: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
 
 
 class DiceLoss(nn.Module):
+    """
+    Dice Loss for binary segmentation.
+    
+    IMPORTANT: Pass LOGITS (before sigmoid), not probabilities.
+    This loss applies sigmoid internally.
+    """
     def __init__(self, smooth=1e-6):
         super(DiceLoss, self).__init__()
         self.smooth = smooth
 
     def forward(self, logits, targets):
+        """
+        Args:
+            logits: Raw model outputs (before sigmoid) - shape (N, 1, H, W)
+            targets: Binary ground truth (0 or 1) - shape (N, 1, H, W)
+        """
         probs = torch.sigmoid(logits)
         probs = probs.view(-1)
         targets = targets.view(-1)
@@ -166,9 +317,29 @@ class FLAIREvolutionDataset(Dataset):
                 if not match:
                     continue
                 
-                patient_id, _ = match.groups()
+                patient_id, wave_id = match.groups()
                 flair_path = os.path.join(flair_folder, f)
-                wmh_path = os.path.join(wmh_folder, f) if wmh_folder and os.path.exists(os.path.join(wmh_folder, f)) else None
+                
+                # ✅ FIX: Construct correct WMH filename
+                # FLAIR: LBC360002_1_FLAIR_reg_T2_brain.nii
+                # WMH:   LBC360002_1_WMH.nii
+                wmh_path = None
+                if wmh_folder:
+                    # Construct WMH filename from patient_id and wave_id
+                    wmh_filename = f"LBC36{patient_id}_{wave_id}_WMH.nii"
+                    wmh_path_candidate = os.path.join(wmh_folder, wmh_filename)
+                    
+                    # Also try .nii.gz extension
+                    if not os.path.exists(wmh_path_candidate):
+                        wmh_filename = f"LBC36{patient_id}_{wave_id}_WMH.nii.gz"
+                        wmh_path_candidate = os.path.join(wmh_folder, wmh_filename)
+                    
+                    if os.path.exists(wmh_path_candidate):
+                        wmh_path = wmh_path_candidate
+                    else:
+                        # Debug: Print when WMH file is not found
+                        if len(patient_scans) < 5:  # Only print for first few patients to avoid spam
+                            print(f"   ⚠️  WMH not found: {wmh_path_candidate}")
                 
                 patient_scans[patient_id][scan_pair] = {
                     "flair_path": flair_path,
@@ -200,6 +371,18 @@ class FLAIREvolutionDataset(Dataset):
 
         print(f"📊 Dataset ready. Found {len(self.index_map)} slices from {len(self.patient_ids)} patients.")
         print(f"🔧 Configuration: use_wmh = {self.use_wmh}")
+        
+        # Debug: Check WMH availability
+        if self.use_wmh:
+            wmh_count = sum(1 for item in self.index_map if item.get("target_wmh_path") is not None)
+            print(f"📊 WMH Data: {wmh_count}/{len(self.index_map)} slices have WMH masks ({wmh_count/len(self.index_map)*100:.1f}%)")
+            if wmh_count == 0:
+                print("⚠️  WARNING: use_wmh=True but NO WMH masks found!")
+                print("   Check that WMH folders exist and files match naming pattern.")
+                # Sample a few entries to debug
+                for i, item in enumerate(self.index_map[:3]):
+                    print(f"   Sample {i}: source_wmh_path = {item.get('source_wmh_path')}")
+                    print(f"   Sample {i}: target_wmh_path = {item.get('target_wmh_path')}")
 
     def _add_scan_pair(self, source_info, target_info, patient_id, scan_pair, time_delta, max_slices_per_patient):
         """Add a source->target scan pair to the dataset."""
@@ -241,21 +424,18 @@ class FLAIREvolutionDataset(Dataset):
     def __getitem__(self, idx):
         info = self.index_map[idx]
         
-        # Load source image
+        # Load source image - ALWAYS just FLAIR (no WMH input)
+        # For prediction task: we predict future WMH from current FLAIR alone
         source_flair = self._load_slice(info["source_flair_path"], info["slice_idx"])
-        if self.use_wmh and info["source_wmh_path"]:
-            source_wmh = self._load_slice(info["source_wmh_path"], info["slice_idx"])
-            source_img = torch.cat([source_flair, source_wmh], dim=0)
-        else:
-            source_img = source_flair
+        source_img = source_flair  # Only 1 channel - FLAIR input
         
-        # Load target image
+        # Load target image - FLAIR + WMH for training supervision
         target_flair = self._load_slice(info["target_flair_path"], info["slice_idx"])
         if self.use_wmh and info["target_wmh_path"]:
             target_wmh = self._load_slice(info["target_wmh_path"], info["slice_idx"])
-            target_img = torch.cat([target_flair, target_wmh], dim=0)
+            target_img = torch.cat([target_flair, target_wmh], dim=0)  # 2 channels
         else:
-            target_img = target_flair
+            target_img = target_flair  # Only FLAIR if WMH not available
         
         return {
             "source": source_img,
@@ -676,7 +856,8 @@ def evaluate_and_visualize_tasks(model_path, source_loader, gt_loaders, device, 
             for task_name, task_info in tasks.items():
                 try:
                     t = torch.tensor([task_info["time"]], device=device)
-                    pred_img = torch.sigmoid(model(source_img, t=t))
+                    # ✅ FIX: DO NOT apply sigmoid - model outputs are already in [0,1] range
+                    pred_img = model(source_img, t=t)
 
                     gt_pair_name = task_info["scan_pair"]
                     gt_batch = next(gt_iterators[gt_pair_name])
