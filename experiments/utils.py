@@ -317,29 +317,9 @@ class FLAIREvolutionDataset(Dataset):
                 if not match:
                     continue
                 
-                patient_id, wave_id = match.groups()
+                patient_id, _ = match.groups()
                 flair_path = os.path.join(flair_folder, f)
-                
-                # ✅ FIX: Construct correct WMH filename
-                # FLAIR: LBC360002_1_FLAIR_reg_T2_brain.nii
-                # WMH:   LBC360002_1_WMH.nii
-                wmh_path = None
-                if wmh_folder:
-                    # Construct WMH filename from patient_id and wave_id
-                    wmh_filename = f"LBC36{patient_id}_{wave_id}_WMH.nii"
-                    wmh_path_candidate = os.path.join(wmh_folder, wmh_filename)
-                    
-                    # Also try .nii.gz extension
-                    if not os.path.exists(wmh_path_candidate):
-                        wmh_filename = f"LBC36{patient_id}_{wave_id}_WMH.nii.gz"
-                        wmh_path_candidate = os.path.join(wmh_folder, wmh_filename)
-                    
-                    if os.path.exists(wmh_path_candidate):
-                        wmh_path = wmh_path_candidate
-                    else:
-                        # Debug: Print when WMH file is not found
-                        if len(patient_scans) < 5:  # Only print for first few patients to avoid spam
-                            print(f"   ⚠️  WMH not found: {wmh_path_candidate}")
+                wmh_path = os.path.join(wmh_folder, f) if wmh_folder and os.path.exists(os.path.join(wmh_folder, f)) else None
                 
                 patient_scans[patient_id][scan_pair] = {
                     "flair_path": flair_path,
@@ -371,18 +351,6 @@ class FLAIREvolutionDataset(Dataset):
 
         print(f"📊 Dataset ready. Found {len(self.index_map)} slices from {len(self.patient_ids)} patients.")
         print(f"🔧 Configuration: use_wmh = {self.use_wmh}")
-        
-        # Debug: Check WMH availability
-        if self.use_wmh:
-            wmh_count = sum(1 for item in self.index_map if item.get("target_wmh_path") is not None)
-            print(f"📊 WMH Data: {wmh_count}/{len(self.index_map)} slices have WMH masks ({wmh_count/len(self.index_map)*100:.1f}%)")
-            if wmh_count == 0:
-                print("⚠️  WARNING: use_wmh=True but NO WMH masks found!")
-                print("   Check that WMH folders exist and files match naming pattern.")
-                # Sample a few entries to debug
-                for i, item in enumerate(self.index_map[:3]):
-                    print(f"   Sample {i}: source_wmh_path = {item.get('source_wmh_path')}")
-                    print(f"   Sample {i}: target_wmh_path = {item.get('target_wmh_path')}")
 
     def _add_scan_pair(self, source_info, target_info, patient_id, scan_pair, time_delta, max_slices_per_patient):
         """Add a source->target scan pair to the dataset."""
@@ -424,18 +392,21 @@ class FLAIREvolutionDataset(Dataset):
     def __getitem__(self, idx):
         info = self.index_map[idx]
         
-        # Load source image - ALWAYS just FLAIR (no WMH input)
-        # For prediction task: we predict future WMH from current FLAIR alone
+        # Load source image
         source_flair = self._load_slice(info["source_flair_path"], info["slice_idx"])
-        source_img = source_flair  # Only 1 channel - FLAIR input
+        if self.use_wmh and info["source_wmh_path"]:
+            source_wmh = self._load_slice(info["source_wmh_path"], info["slice_idx"])
+            source_img = torch.cat([source_flair, source_wmh], dim=0)
+        else:
+            source_img = source_flair
         
-        # Load target image - FLAIR + WMH for training supervision
+        # Load target image
         target_flair = self._load_slice(info["target_flair_path"], info["slice_idx"])
         if self.use_wmh and info["target_wmh_path"]:
             target_wmh = self._load_slice(info["target_wmh_path"], info["slice_idx"])
-            target_img = torch.cat([target_flair, target_wmh], dim=0)  # 2 channels
+            target_img = torch.cat([target_flair, target_wmh], dim=0)
         else:
-            target_img = target_flair  # Only FLAIR if WMH not available
+            target_img = target_flair
         
         return {
             "source": source_img,
@@ -537,6 +508,7 @@ def train_epoch(model, loader, optimizer, ema, mse_loss, device, epoch_idx, trai
     for i, batch in enumerate(pbar):
         source_img, target_img = batch["source"].to(device), batch["target"].to(device)
         time_deltas = batch["time_delta"].to(device)
+        gt_delta = target_img - source_img
 
         optimizer.zero_grad()
 
@@ -569,7 +541,8 @@ def train_epoch(model, loader, optimizer, ema, mse_loss, device, epoch_idx, trai
 
             t = time_deltas[0:1]
             predicted_target = model(source_img, t)
-            loss_pred = mse_loss(predicted_target, target_img)
+            predicted_delta = predicted_target - source_img
+            loss_pred = mse_loss(predicted_delta, gt_delta)
 
             loss_pred.backward()
             optimizer.step()
@@ -593,11 +566,13 @@ def val_epoch(model, loader, device):
 
     recon_psnr_metric = torchmetrics.PeakSignalNoiseRatio(data_range=1.0).to(device)
     pred_psnr_metric = torchmetrics.PeakSignalNoiseRatio(data_range=1.0).to(device)
+    delta_psnr_metric = torchmetrics.PeakSignalNoiseRatio(data_range=1.0).to(device)
 
     with torch.no_grad():
         for batch in loader:
             source_img, target_img = batch["source"].to(device), batch["target"].to(device)
             time_deltas = batch["time_delta"].to(device)
+            gt_delta = target_img - source_img
 
             # Reconstruction PSNR
             source_recon = model(source_img, t=torch.zeros(1).to(device))
@@ -608,12 +583,15 @@ def val_epoch(model, loader, device):
             # Prediction PSNR
             t = time_deltas[0:1]
             predicted_target = model(source_img, t)
+            predicted_delta = predicted_target - source_img
             pred_psnr_metric.update(predicted_target, target_img)
+            delta_psnr_metric.update(predicted_delta, gt_delta)
 
     avg_recon_psnr = recon_psnr_metric.compute().item()
     avg_pred_psnr = pred_psnr_metric.compute().item()
+    avg_delta_psnr = delta_psnr_metric.compute().item()
 
-    return avg_recon_psnr, avg_pred_psnr
+    return avg_recon_psnr, avg_pred_psnr, avg_delta_psnr
 
 
 # ============================================================
@@ -703,36 +681,53 @@ def visualize_results(source, ground_truth, predicted, patient_ids, slice_indice
     plt.close()
     print(f"Visual results saved to {save_path}")
 
-
 def plot_fold_history(history, fold_idx, save_dir="plots"):
     """Plots and saves the training and validation history for a fold."""
-    import pandas as pd
     
     os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, f"training_history_fold_{fold_idx}.png")
 
     fig, ax1 = plt.subplots(figsize=(12, 6))
+    
+    # Check if history is empty
+    if not history['train_recon_loss']:
+        print(f"⚠️ Skipping plot for fold {fold_idx}: No history data.")
+        plt.close()
+        return
+        
     epochs = range(1, len(history['train_recon_loss']) + 1)
 
+    # Axis 1: Losses
     ax1.plot(epochs, history['train_recon_loss'], 'b-', label='Train Recon Loss')
-    ax1.plot(epochs, history['train_pred_loss'], 'g-', label='Train Pred Loss')
+    # Note: 'train_pred_loss' is now the "Delta Loss"
+    ax1.plot(epochs, history['train_pred_loss'], 'g-', label='Train Delta Loss') 
     ax1.set_xlabel('Epoch')
     ax1.set_ylabel('Training Loss', color='b')
     ax1.tick_params(axis='y', labelcolor='b')
     ax1.set_ylim(bottom=0)
 
+    # Axis 2: PSNRs
     ax2 = ax1.twinx()
+    
+    # Plot Recon and Pred PSNRs (Diagnostic Metrics)
     ax2.plot(epochs, history['val_recon_psnr'], 'r--', label='Val Recon PSNR')
     ax2.plot(epochs, history['val_pred_psnr'], 'm--', label='Val Pred PSNR')
     
-    # Add train PSNR curves if they exist
-    if 'train_recon_psnr' in history and 'train_pred_psnr' in history:
+    if 'train_recon_psnr' in history:
         ax2.plot(epochs, history['train_recon_psnr'], 'r:', alpha=0.6, label='Train Recon PSNR')
+    if 'train_pred_psnr' in history:
         ax2.plot(epochs, history['train_pred_psnr'], 'm:', alpha=0.6, label='Train Pred PSNR')
     
-    ax2.set_ylabel('Validation PSNR (dB)', color='r')
+    if 'val_delta_psnr' in history:
+        ax2.plot(epochs, history['val_delta_psnr'], 'c--', linewidth=2, label='**Val Delta PSNR**')
+        
+    if 'train_delta_psnr' in history:
+        ax2.plot(epochs, history['train_delta_psnr'], 'c:', alpha=0.7, label='Train Delta PSNR')
+
+    ax2.set_ylabel('PSNR (dB)', color='r') # Changed from "Validation PSNR"
     ax2.tick_params(axis='y', labelcolor='r')
 
+    # Legend and Layout
     fig.suptitle(f'Training History - Fold {fold_idx}')
     lines, labels = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
