@@ -173,7 +173,7 @@ class Experiment1(BaseExperiment):
         ema = ExponentialMovingAverage(model.parameters(), decay=0.9)
         mse_loss = nn.MSELoss()
         
-        best_val_psnr = 0.0
+        best_val_delta_psnr = 0.0
         recon_good_enough = False
         model_save_path = self.get_model_path(val_fold_idx)
         
@@ -182,8 +182,10 @@ class Experiment1(BaseExperiment):
             'train_pred_loss': [],
             'train_recon_psnr': [],   # ← added
             'train_pred_psnr': [],    # ← added
+            'train_delta_psnr': [],
             'val_recon_psnr': [],
-            'val_pred_psnr': []
+            'val_pred_psnr': [],
+            'val_delta_psnr': []
         }
         
         # Training loop
@@ -195,7 +197,7 @@ class Experiment1(BaseExperiment):
             )
             
             with ema.average_parameters():
-                val_recon_psnr, val_pred_psnr = val_epoch(model, val_loader, self.config["DEVICE"])
+                val_recon_psnr, val_pred_psnr, val_delta_psnr = val_epoch(model, val_loader, self.config["DEVICE"])
             
             with torch.no_grad(), ema.average_parameters():
                 # Sample training set for faster evaluation
@@ -204,23 +206,26 @@ class Experiment1(BaseExperiment):
                     batch_size=self.config["BATCH_SIZE"],
                     shuffle=False
                 )
-                train_recon_psnr, train_pred_psnr = val_epoch(model, train_sample_loader, self.config["DEVICE"])
+                train_recon_psnr, train_pred_psnr, train_delta_psnr = val_epoch(model, train_sample_loader, self.config["DEVICE"])
 
             history['train_recon_loss'].append(avg_recon_loss)
             history['train_pred_loss'].append(avg_pred_loss)
             history['train_recon_psnr'].append(train_recon_psnr)  # ✅ New
             history['train_pred_psnr'].append(train_pred_psnr)
+            history['train_delta_psnr'].append(train_delta_psnr)
             history['val_recon_psnr'].append(val_recon_psnr)
             history['val_pred_psnr'].append(val_pred_psnr)
+            history['val_delta_psnr'].append(val_delta_psnr)
             
-            print(f"Epoch {epoch+1}: Train PSNR={train_pred_psnr:.4f}, Val PSNR={val_pred_psnr:.4f}")
+            print(f"""Epoch {epoch+1}: Train Recon PSNR={train_recon_psnr:.4f}, Train Pred PSNR={train_pred_psnr:.4f}, Train Delta PSNR={train_delta_psnr:.4f}
+                  Val Recon PSNR={val_recon_psnr:.4f}, Val Pred PSNR={val_pred_psnr:.4f}, Val Delta PSNR={val_delta_psnr:.4f}""")
             
             if not recon_good_enough and val_recon_psnr > self.config["RECON_PSNR_THR"]:
                 recon_good_enough = True
                 print("Reconstruction threshold reached. Starting ODE training.")
             
-            if val_pred_psnr > best_val_psnr:
-                best_val_psnr = val_pred_psnr
+            if val_delta_psnr > best_val_delta_psnr:
+                best_val_delta_psnr = val_delta_psnr
                 torch.save(model.state_dict(), model_save_path)
                 print(f"✅ Val PSNR improved. Model saved to {model_save_path}")
             
@@ -236,8 +241,10 @@ class Experiment1(BaseExperiment):
             'train_pred_loss': history['train_pred_loss'],
             'train_recon_psnr': history['train_recon_psnr'],
             'train_pred_psnr': history['train_pred_psnr'],
+            'train_delta_psnr': history['train_delta_psnr'],
             'val_recon_psnr': history['val_recon_psnr'],
-            'val_pred_psnr': history['val_pred_psnr']
+            'val_pred_psnr': history['val_pred_psnr'],
+            'val_delta_psnr': history['val_delta_psnr'],
         })
         history_csv_path = os.path.join(self.results_dir, f"training_history_fold_{val_fold_idx}.csv")
         history_df.to_csv(history_csv_path, index=False)
@@ -529,7 +536,7 @@ if __name__ == "__main__":
         "MAX_PATIENTS_PER_FOLD": 5,
         
         # Thresholds and coefficients
-        "RECON_PSNR_THR": 25.0,
+        "RECON_PSNR_THR": 40.0,
         "CONTRASTIVE_COEFF": 0.1,
         
         # Cross-validation
