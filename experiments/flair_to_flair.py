@@ -4,7 +4,7 @@ Experiment 1: FLAIR → FLAIR with downstream segmentation
 """
 
 from base import BaseExperiment
-from utils import (
+from utils_laras import (
     FLAIREvolutionDataset,
     LinearWarmupCosineAnnealingLR,
     neg_cos_sim,
@@ -24,10 +24,12 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Subset
 from torch_ema import ExponentialMovingAverage
+torch.cuda.empty_cache()
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from ImageFlowNet.src.nn.imageflownet_ode import ImageFlowNetODE
+from losses import L1SSIMLoss
 
 
 class Experiment1(BaseExperiment):
@@ -100,6 +102,8 @@ class Experiment1(BaseExperiment):
             use_wmh=self.use_wmh,
             training_pairs=training_pairs  # Only train on t1->t3
         )
+
+        self._diagnose_wmh(full_dataset)
         
         # Load fold assignments
         fold_csv = self.config["FOLD_CSV"]
@@ -171,7 +175,7 @@ class Experiment1(BaseExperiment):
             max_epochs=self.config["NUM_EPOCHS"]
         )
         ema = ExponentialMovingAverage(model.parameters(), decay=0.9)
-        mse_loss = nn.MSELoss()
+        recon_loss = L1SSIMLoss(alpha=0.7)
         
         best_val_delta_psnr = 0.0
         recon_good_enough = False
@@ -191,9 +195,10 @@ class Experiment1(BaseExperiment):
         # Training loop
         for epoch in range(self.config["NUM_EPOCHS"]):
             avg_recon_loss, avg_pred_loss = train_epoch(
-                model, train_loader, optimizer, ema, mse_loss,
+                model, train_loader, optimizer, ema, recon_loss,
                 self.config["DEVICE"], epoch, recon_good_enough,
-                self.config["NUM_EPOCHS"], self.config["CONTRASTIVE_COEFF"]
+                self.config["NUM_EPOCHS"], self.config["CONTRASTIVE_COEFF"],
+                wmh_lambda=self.config.get("WMH_LAMBDA", 1.0)
             )
             
             with ema.average_parameters():
@@ -514,39 +519,15 @@ class Experiment1(BaseExperiment):
 if __name__ == "__main__":
     """
     Run this experiment directly without going through main.py
-    Usage: python -m experiments.flair_to_flair
+    Usage: python experiments/flair_to_flair.py
     """
     print("\n" + "="*70)
     print("🧪 Running Experiment 1: FLAIR → FLAIR (Standalone Mode)")
     print("="*70 + "\n")
     
-    # Configuration
-    CONFIG = {
-        # Dataset
-        # "ROOT_DIR": "/app/dataset/LBC1936",
-        "ROOT_DIR": "/disk/febrian/Edinburgh_Data/LBC1936",
-        "FOLD_CSV": "train_val_5fold.csv",
-        "TEST_CSV": "test_set_patients.csv",
-        
-        # Training
-        "BATCH_SIZE": 64,
-        "LEARNING_RATE": 1e-4,
-        "NUM_EPOCHS": 100,
-        "MAX_SLICES": 48,
-        "MAX_PATIENTS_PER_FOLD": 5,
-        
-        # Thresholds and coefficients
-        "RECON_PSNR_THR": 40.0,
-        "CONTRASTIVE_COEFF": 0.1,
-        
-        # Cross-validation
-        "CV_FOLDS": [1, 2, 3, 4, 5],
-        
-        # Device
-        "DEVICE": torch.device("cuda" if torch.cuda.is_available() else "cpu"),
-    }
-    
-    CONFIG["K_FOLDS"] = len(CONFIG["CV_FOLDS"])
+    # Import config from main.py (reuse the same config)
+    from main import CONFIG as MAIN_CONFIG
+    CONFIG = MAIN_CONFIG
     
     print(f"Using device: {CONFIG['DEVICE']}")
     
@@ -554,7 +535,7 @@ if __name__ == "__main__":
     experiment_config = {
         "name": "flair_to_flair",
         "description": "FLAIR → FLAIR prediction without WMH input",
-        "use_wmh": False,
+        "use_wmh": True,
         "class": Experiment1
     }
     

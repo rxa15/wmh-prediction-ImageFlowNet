@@ -4,6 +4,7 @@ Base experiment class that defines the common interface for all experiments.
 """
 
 from abc import ABC, abstractmethod
+from utils_laras import run_stage2_inference_only
 import os
 
 
@@ -66,7 +67,6 @@ class BaseExperiment(ABC):
             pretrained_model_path: Path to the pretrained SwinUNETR model (.pth file)
             time_point_label: Label for the time point being evaluated
         """
-        from .utils import run_stage2_inference_only
         
         print(f"\n{'='*60}")
         print(f"🔬 Starting Stage 2 WMH Segmentation Inference")

@@ -21,21 +21,14 @@ import argparse
 # Import experiments directly (same folder)
 from base import BaseExperiment
 from flair_to_flair import Experiment1
-from flair_to_flair_wmh import Experiment3
 
 # Registry of available experiments
 EXPERIMENTS = {
     1: {
         "name": "flair_to_flair",
-        "use_wmh": False,
+        "use_wmh": True,
         "description": "FLAIR → FLAIR (two-stage: prediction then segmentation)",
         "class": Experiment1
-    },
-    3: {
-        "name": "flair_to_flair_wmh",
-        "use_wmh": True,
-        "description": "FLAIR → FLAIR+WMH (joint training: single-stage prediction)",
-        "class": Experiment3
     }
 }
 
@@ -45,8 +38,8 @@ EXPERIMENTS = {
 
 CONFIG = {
     # Dataset
-    # "ROOT_DIR": "/app/dataset/LBC1936",
-    "ROOT_DIR": "/disk/febrian/Edinburgh_Data/LBC1936",
+    "ROOT_DIR": "/app/dataset/LBC1936",
+    # "ROOT_DIR": "/disk/febrian/Edinburgh_Data/LBC1936",
     "FOLD_CSV": "train_val_5fold.csv",
     "TEST_CSV": "test_set_patients.csv",
     
@@ -58,7 +51,7 @@ CONFIG = {
     "MAX_PATIENTS_PER_FOLD": 10000,
     
     # Thresholds and coefficients
-    "RECON_PSNR_THR": 25.0,
+    "RECON_PSNR_THR": 40.0,
     "CONTRASTIVE_COEFF": 0.1,
     "SEG_LOSS_WEIGHT": 1.0,  # Weight for segmentation loss (Experiment 3)
     
