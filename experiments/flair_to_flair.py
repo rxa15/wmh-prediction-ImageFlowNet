@@ -569,8 +569,8 @@ if __name__ == "__main__":
     
     # Experiment configuration
     experiment_config = {
-        "name": "flair_to_flair",
-        "description": "FLAIR → FLAIR prediction without WMH input",
+        "name": "flair_to_flair_baseline",
+        "description": "FLAIR -> FLAIR (two-stage: prediction then segmentation, loss: L1 only)",
         "use_wmh": True,
         "class": Experiment1
     }

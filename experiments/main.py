@@ -29,13 +29,13 @@ EXPERIMENTS = {
     1: {
         "name": "flair_to_flair_baseline",
         "use_wmh": True,
-        "description": "FLAIR ? FLAIR (two-stage: prediction then segmentation, loss: L1 only)",
+        "description": "FLAIR -> FLAIR (two-stage: prediction then segmentation, loss: L1 only)",
         "class": Experiment1
     },
     2: {
         "name": "flair_to_flair_contrastive",
         "use_wmh": True,
-        "description": "FLAIR ? FLAIR (two-stage: prediction then segmentation, loss: L1 + SSIM)",
+        "description": "FLAIR -> FLAIR (two-stage: prediction then segmentation, loss: L1 + SSIM)",
         "class": Experiment2
     }
 }
