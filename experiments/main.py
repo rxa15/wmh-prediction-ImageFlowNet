@@ -6,29 +6,37 @@ This script provides a unified interface to run different experiments via comman
 All experiments follow the same pipeline with cross-validation.
 
 Usage:
-    python main.py --exp 1  # Run Experiment 1: FLAIR → FLAIR (two-stage)
-    python main.py --exp 3  # Run Experiment 3: FLAIR → FLAIR+WMH (joint training)
-
+    python main.py --exp 1  # Run Experiment 1: FLAIR ? FLAIR (two-stage, loss: L1 only)
+    python main.py --exp 2  # Run Experiment 2: FLAIR ? FLAIR (two-stage, loss: L1 + SSIM)
+    
 Available Experiments:
-    1: FLAIR → FLAIR (two-stage: prediction then segmentation)
-    3: FLAIR → FLAIR+WMH (joint training: single-stage prediction)
+    1: FLAIR ? FLAIR (two-stage: prediction then segmentation, loss: L1 only)
+    2: FLAIR ? FLAIR (two-stage: prediction then segmentation, loss: L1 + SSIM)
 """
 
 import os
 import torch
+torch.cuda.empty_cache()
 import argparse
 
 # Import experiments directly (same folder)
 from base import BaseExperiment
 from flair_to_flair import Experiment1
+from flair_to_flair_contrastive import Experiment2
 
 # Registry of available experiments
 EXPERIMENTS = {
     1: {
-        "name": "flair_to_flair",
+        "name": "flair_to_flair_baseline",
         "use_wmh": True,
-        "description": "FLAIR → FLAIR (two-stage: prediction then segmentation)",
+        "description": "FLAIR ? FLAIR (two-stage: prediction then segmentation, loss: L1 only)",
         "class": Experiment1
+    },
+    2: {
+        "name": "flair_to_flair_contrastive",
+        "use_wmh": True,
+        "description": "FLAIR ? FLAIR (two-stage: prediction then segmentation, loss: L1 + SSIM)",
+        "class": Experiment2
     }
 }
 
@@ -44,11 +52,11 @@ CONFIG = {
     "TEST_CSV": "test_set_patients.csv",
     
     # Training
-    "BATCH_SIZE": 16,
+    "BATCH_SIZE": 2,
     "LEARNING_RATE": 1e-4,
-    "NUM_EPOCHS": 100,
-    "MAX_SLICES": 48,
-    "MAX_PATIENTS_PER_FOLD": 10000,
+    "NUM_EPOCHS": 5,
+    "MAX_SLICES": 8,
+    "MAX_PATIENTS_PER_FOLD": 5,
     
     # Thresholds and coefficients
     "RECON_PSNR_THR": 40.0,
@@ -74,12 +82,12 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Available Experiments:
-  1: FLAIR → FLAIR (two-stage: prediction then segmentation)
-  3: FLAIR → FLAIR+WMH (joint training: single-stage prediction)
+  1: FLAIR ? FLAIR (two-stage, loss: L1 only)
+  2: FLAIR ? FLAIR (two-stage, loss: L1 + SSIM)
 
 Examples:
   python main.py --exp 1    # Run Experiment 1
-  python main.py --exp 3    # Run Experiment 3
+  python main.py --exp 2    # Run Experiment 2
         """
     )
     parser.add_argument(
@@ -113,7 +121,7 @@ def main():
     
     # Print experiment information
     print("\n" + "="*70)
-    print(f"🧪 EXPERIMENT {experiment_number}: {exp_config['description']}")
+    print(f"?? EXPERIMENT {experiment_number}: {exp_config['description']}")
     print("="*70)
     print(f"Name:        {exp_config['name']}")
     print(f"Use WMH:     {exp_config['use_wmh']}")
@@ -125,7 +133,7 @@ def main():
     experiment.run()
     
     print("\n" + "="*70)
-    print("✅ EXPERIMENT COMPLETE")
+    print("? EXPERIMENT COMPLETE")
     print("="*70 + "\n")
 
 

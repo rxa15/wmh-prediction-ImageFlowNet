@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Experiment 1: FLAIR → FLAIR with downstream segmentation (only using L1 loss)
+Experiment 2: FLAIR → FLAIR with downstream segmentation (using L1 + SSIM loss).
 """
 
 from base import BaseExperiment
@@ -29,17 +29,18 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from ImageFlowNet.src.nn.imageflownet_ode import ImageFlowNetODE
+from losses import L1SSIMLoss
 
 
-class Experiment1(BaseExperiment):
+class Experiment2(BaseExperiment):
     """
-    Experiment 1: FLAIR → FLAIR prediction with downstream WMH segmentation.
-    Uses only L1 loss for segmentation
+    Experiment 2: FLAIR → FLAIR prediction with downstream WMH segmentation (using L1 + SSIM loss).
+    Uses only FLAIR data (no WMH input).
     """
     
     def __init__(self, experiment_number, experiment_config, config):
         """
-        Initialize Experiment 1.
+        Initialize Experiment 2.
         
         Args:
             experiment_number: The experiment number
@@ -102,11 +103,12 @@ class Experiment1(BaseExperiment):
         else:
             print("✅ WMH found in dataset.")
             print("=================================================\n")
+
     
     def run(self):
-        """Execute the full Experiment 1 pipeline."""
+        """Execute the full Experiment 2 pipeline."""
         print("\n" + "="*60)
-        print("Starting Experiment 1: FLAIR → FLAIR (L1 only)")
+        print("Starting Experiment 2: FLAIR → FLAIR (using L1 + SSIM loss)")
         print("="*60 + "\n")
         
         # Stage 1: Train ImageFlowNet models
@@ -211,7 +213,7 @@ class Experiment1(BaseExperiment):
             max_epochs=self.config["NUM_EPOCHS"]
         )
         ema = ExponentialMovingAverage(model.parameters(), decay=0.9)
-        recon_loss = nn.L1Loss()
+        recon_loss = L1SSIMLoss(alpha=0.7)
         
         best_val_delta_psnr = 0.0
         recon_good_enough = False
@@ -220,8 +222,8 @@ class Experiment1(BaseExperiment):
         history = {
             'train_recon_loss': [],
             'train_pred_loss': [],
-            'train_recon_psnr': [],   
-            'train_pred_psnr': [],    
+            'train_recon_psnr': [],   # ← added
+            'train_pred_psnr': [],    # ← added
             'train_delta_psnr': [],
             'val_recon_psnr': [],
             'val_pred_psnr': [],
@@ -251,7 +253,7 @@ class Experiment1(BaseExperiment):
 
             history['train_recon_loss'].append(avg_recon_loss)
             history['train_pred_loss'].append(avg_pred_loss)
-            history['train_recon_psnr'].append(train_recon_psnr)  
+            history['train_recon_psnr'].append(train_recon_psnr)  # ✅ New
             history['train_pred_psnr'].append(train_pred_psnr)
             history['train_delta_psnr'].append(train_delta_psnr)
             history['val_recon_psnr'].append(val_recon_psnr)
@@ -558,7 +560,7 @@ if __name__ == "__main__":
     Usage: python experiments/flair_to_flair.py
     """
     print("\n" + "="*70)
-    print("🧪 Running Experiment 1: FLAIR → FLAIR (Standalone Mode)")
+    print("🧪 Running Experiment 2: FLAIR → FLAIR (L1 + SSIM loss)")
     print("="*70 + "\n")
     
     # Import config from main.py (reuse the same config)
@@ -572,12 +574,12 @@ if __name__ == "__main__":
         "name": "flair_to_flair",
         "description": "FLAIR → FLAIR prediction without WMH input",
         "use_wmh": True,
-        "class": Experiment1
+        "class": Experiment2
     }
     
     # Run experiment
-    experiment = Experiment1(
-        experiment_number=1,
+    experiment = Experiment2(
+        experiment_number=2,
         experiment_config=experiment_config,
         config=CONFIG
     )

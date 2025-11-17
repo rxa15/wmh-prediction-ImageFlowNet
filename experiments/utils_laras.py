@@ -1078,7 +1078,6 @@ def evaluate_and_visualize_tasks(model_path, source_loader, gt_loaders, device, 
         }
     return final_results
 
-
 def load_folds_from_csv(fold_csv_path):
     """Load predefined patient folds from CSV."""
     df = pd.read_csv(fold_csv_path, dtype={"patient_ID": str})  
