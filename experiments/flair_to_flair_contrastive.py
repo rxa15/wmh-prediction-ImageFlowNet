@@ -557,7 +557,7 @@ class Experiment2(BaseExperiment):
 if __name__ == "__main__":
     """
     Run this experiment directly without going through main.py
-    Usage: python experiments/flair_to_flair.py
+    Usage: python experiments/flair_to_flair_contrastive.py
     """
     print("\n" + "="*70)
     print("🧪 Running Experiment 2: FLAIR → FLAIR (L1 + SSIM loss)")
