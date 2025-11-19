@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Experiment 3: FLAIR → FLAIR (multi-horizon: t1->t2, t1->t3, t1->t4) prediction with downstream WMH segmentation
-Using L1 + SSIM loss, separate forward passes per (source, target, Δt) pair
+Experiment 3: FLAIR → FLAIR (dense pairs) prediction with downstream WMH segmentation
+Using L1 loss, separate forward passes per (source, target, Δt) pair
 """
 
 from base import BaseExperiment
@@ -30,13 +30,12 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from ImageFlowNet.src.nn.imageflownet_ode import ImageFlowNetODE
-from losses import L1SSIMLoss
 
 
 class Experiment3(BaseExperiment):
     """
-    Experiment 3: FLAIR → FLAIR (multi-horizon: t1->t2, t1->t3, t1->t4) prediction with downstream WMH segmentation
-    Using L1 + SSIM loss, separate forward passes per (source, target, Δt) pair
+    Experiment 3: FLAIR → FLAIR (dense-pairs: ALL POSSIBLE PAIRS) prediction with downstream WMH segmentation
+    Using L1 loss, separate forward passes per (source, target, Δt) pair
     """
     
     def __init__(self, experiment_number, experiment_config, config):
@@ -109,7 +108,7 @@ class Experiment3(BaseExperiment):
     def run(self):
         """Execute the full Experiment 3 pipeline."""
         print("\n" + "="*60)
-        print("Starting Experiment 3: FLAIR → FLAIR (multi-horizon: t1->t2, t1->t3, t1->t4) prediction with downstream WMH segmentation")
+        print("Starting Experiment 3: FLAIR → FLAIR (dense pairs) prediction with downstream WMH segmentation")
         print("="*60 + "\n")
         
         # Stage 1: Train ImageFlowNet models
@@ -122,19 +121,21 @@ class Experiment3(BaseExperiment):
             print("[Stage 2] Skipped because Stage 1 did not complete successfully.")
     
     def _stage1_train_imageflownet(self):
-        """Train ImageFlowNet models using cross-validation (multi-horizon)."""
+        """Train ImageFlowNet models using cross-validation (dense pairs)."""
         print("="*60)
-        print("✅ STAGE 1: ImageFlowNet Training (multi-horizon)")
+        print("✅ STAGE 1: ImageFlowNet Training (dense pairs)")
         print("="*60)
         
-        # Train on multiple horizons: t1 -> t2, t1 -> t3, t1 -> t4
         training_pairs = [
-            ("Scan1Wave2", "Scan2Wave3", 1.0),  # Train on t1 -> t2 (Interpolation horizon)
-            ("Scan1Wave2", "Scan3Wave4", 2.0),  # Train on t1 -> t3 (Training horizon)
-            ("Scan1Wave2", "Scan4Wave5", 3.0)   # Train on t1 -> t4 (Extrapolation horizon)
+            ("Scan1Wave2", "Scan2Wave3", 1.0),  # t1 -> t2
+            ("Scan1Wave2", "Scan3Wave4", 2.0),  # t1 -> t3
+            ("Scan1Wave2", "Scan4Wave5", 3.0),  # t1 -> t4
+            ("Scan2Wave3", "Scan3Wave4", 1.0),  # t2 -> t3
+            ("Scan2Wave3", "Scan4Wave5", 2.0),  # t2 -> t4
+            ("Scan3Wave4", "Scan4Wave5", 1.0),  # t3 -> t4
         ]
         
-        print("Initializing dataset with custom training pairs (t1->t2, t1->t3, t1->t4)...")
+        print("Initializing dataset with custom training pairs ...")
         full_dataset = FLAIREvolutionDataset(
             root_dir=self.config["ROOT_DIR"],
             max_slices_per_patient=self.config["MAX_SLICES"],
@@ -214,7 +215,7 @@ class Experiment3(BaseExperiment):
             max_epochs=self.config["NUM_EPOCHS"]
         )
         ema = ExponentialMovingAverage(model.parameters(), decay=0.9)
-        recon_loss = L1SSIMLoss(alpha=0.7)
+        recon_loss = nn.L1Loss()
         
         best_val_delta_psnr = 0.0
         recon_good_enough = False
@@ -560,10 +561,10 @@ class Experiment3(BaseExperiment):
 if __name__ == "__main__":
     """
     Run this experiment directly without going through main.py
-    Usage: python experiments/flair_to_flair_multi_horizon.py
+    Usage: python experiments/flair_to_flair_dense_pairs_L1.py
     """
     print("\n" + "="*70)
-    print("🧪 Running Experiment 3: FLAIR → FLAIR (multi-horizon, L1 + SSIM)")
+    print("🧪 Running Experiment 3: FLAIR → FLAIR (dense pairs, L1)")
     print("="*70 + "\n")
     
     # Import config from main.py (reuse the same config)
@@ -574,8 +575,8 @@ if __name__ == "__main__":
     
     # Experiment configuration
     experiment_config = {
-        "name": "flair_to_flair_multi_horizon",
-        "description": "FLAIR -> FLAIR (multi-horizon: t1->t2, t1->t3, t1->t4) prediction with downstream WMH segmentation",
+        "name": "flair_to_flair_dense_pairs_L1",
+        "description": "FLAIR -> FLAIR (dense pairs) prediction with downstream WMH segmentation",
         "use_wmh": True,
         "class": Experiment3
     }
