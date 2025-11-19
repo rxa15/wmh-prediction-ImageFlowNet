@@ -8,10 +8,12 @@ All experiments follow the same pipeline with cross-validation.
 Usage:
     python main.py --exp 1  # Run Experiment 1: FLAIR ? FLAIR (two-stage, loss: L1 only)
     python main.py --exp 2  # Run Experiment 2: FLAIR ? FLAIR (two-stage, loss: L1 + SSIM)
+    python main.py --exp 3  # Run Experiment 3: FLAIR ? FLAIR (multi-horizon, loss: L1 + SSIM)
     
 Available Experiments:
     1: FLAIR ? FLAIR (two-stage: prediction then segmentation, loss: L1 only)
     2: FLAIR ? FLAIR (two-stage: prediction then segmentation, loss: L1 + SSIM)
+    3: FLAIR ? FLAIR (multi-horizon: t1->t2, t1->t3, t1->t4) prediction with downstream WMH segmentation
 """
 
 import os
@@ -23,6 +25,7 @@ import argparse
 from base import BaseExperiment
 from flair_to_flair import Experiment1
 from flair_to_flair_contrastive import Experiment2
+from flair_to_flair_multi_horizon import Experiment3
 
 # Registry of available experiments
 EXPERIMENTS = {
@@ -37,6 +40,12 @@ EXPERIMENTS = {
         "use_wmh": True,
         "description": "FLAIR -> FLAIR (two-stage: prediction then segmentation, loss: L1 + SSIM)",
         "class": Experiment2
+    },
+    3: {
+        "name": "flair_to_flair_multi_horizon",
+        "use_wmh": True,
+        "description": "FLAIR -> FLAIR (multi-horizon: t1->t2, t1->t3, t1->t4) prediction with downstream WMH segmentation",
+        "class": Experiment3
     }
 }
 
@@ -84,10 +93,12 @@ def parse_args():
 Available Experiments:
   1: FLAIR ? FLAIR (two-stage, loss: L1 only)
   2: FLAIR ? FLAIR (two-stage, loss: L1 + SSIM)
+  3: FLAIR ? FLAIR (multi-horizon, loss: L1 + SSIM)
 
 Examples:
   python main.py --exp 1    # Run Experiment 1
   python main.py --exp 2    # Run Experiment 2
+  python main.py --exp 3    # Run Experiment 3
         """
     )
     parser.add_argument(
