@@ -271,7 +271,7 @@ class FLAIREvolutionDataset(Dataset):
                        e.g., [("Scan1Wave2", "Scan3Wave4", 2.0)] for t1->t3 training
                        If None, loads all available pairs.
     """
-    def __init__(self, root_dir, transform=None, max_slices_per_patient=None, use_wmh=False, training_pairs=None):
+    def __init__(self, root_dir, transform=None, max_slices_per_patient=None, use_wmh=True, training_pairs=None):
         self.root_dir = root_dir
         self.transform = transform
         self.use_wmh = use_wmh
@@ -424,7 +424,9 @@ class FLAIREvolutionDataset(Dataset):
             smax = float(img_slice.max())
             if smax - smin > 1e-8:
                 img_slice = (img_slice - smin) / (smax - smin)
-        return torch.from_numpy(img_slice).unsqueeze(0)
+        # return torch.from_numpy(img_slice).unsqueeze(0) # OLD
+        # return torch.from_numpy(img_slice.copy()).unsqueeze(0) # ANOTHER OPTION
+        return torch.tensor(img_slice, dtype=torch.float32).unsqueeze(0) # RECOMMENDED
 
     def __len__(self):
         return len(self.index_map)
@@ -437,22 +439,49 @@ class FLAIREvolutionDataset(Dataset):
         s_vmin, s_vmax = self._get_volume_minmax(info["source_flair_path"])
         t_vmin, t_vmax = self._get_volume_minmax(info["target_flair_path"])
 
-        # Load source image (volume-wise normalized)
-        source_flair = self._load_slice(info["source_flair_path"], slice_idx, vmin=s_vmin, vmax=s_vmax)
-        if self.use_wmh and info["source_wmh_path"]:
-            # For WMH masks, values are typically 0/1; keep as-is (no per-slice stretching)
-            source_wmh = self._load_slice(info["source_wmh_path"], slice_idx, vmin=None, vmax=None)
-            source_img = torch.cat([source_flair, source_wmh], dim=0)
-        else:
-            source_img = source_flair
+        # # Load source image (volume-wise normalized)
+        # source_flair = self._load_slice(info["source_flair_path"], slice_idx, vmin=s_vmin, vmax=s_vmax)
+        # if self.use_wmh and info["source_wmh_path"]:
+        #     # For WMH masks, values are typically 0/1; keep as-is (no per-slice stretching)
+        #     source_wmh = self._load_slice(info["source_wmh_path"], slice_idx, vmin=None, vmax=None)
+        #     source_img = torch.cat([source_flair, source_wmh], dim=0)
+        # else:
+        #     source_img = source_flair
         
-        # Load target image (volume-wise normalized)
-        target_flair = self._load_slice(info["target_flair_path"], slice_idx, vmin=t_vmin, vmax=t_vmax)
-        if self.use_wmh and info["target_wmh_path"]:
-            target_wmh = self._load_slice(info["target_wmh_path"], slice_idx, vmin=None, vmax=None)
-            target_img = torch.cat([target_flair, target_wmh], dim=0)
+        # # Load target image (volume-wise normalized)
+        # target_flair = self._load_slice(info["target_flair_path"], slice_idx, vmin=t_vmin, vmax=t_vmax)
+        # if self.use_wmh and info["target_wmh_path"]:
+        #     target_wmh = self._load_slice(info["target_wmh_path"], slice_idx, vmin=None, vmax=None)
+        #     target_img = torch.cat([target_flair, target_wmh], dim=0)
+        # else:
+        #     target_img = target_flair
+
+        # ---- Source ----
+        source_flair = self._load_slice(info["source_flair_path"], slice_idx, vmin=s_vmin, vmax=s_vmax)
+        if self.use_wmh:
+            if info["source_wmh_path"]:
+                source_wmh = self._load_slice(info["source_wmh_path"], slice_idx, vmin=None, vmax=None)
+            else:
+                # create an empty WMH channel if mask is missing
+                source_wmh = torch.zeros_like(source_flair)
+            source_img = torch.cat([source_flair, source_wmh], dim=0)   # always [2,H,W]
         else:
-            target_img = target_flair
+            source_img = source_flair                                   # always [1,H,W]
+
+        # ---- Target ----
+        target_flair = self._load_slice(info["target_flair_path"], slice_idx, vmin=t_vmin, vmax=t_vmax)
+        if self.use_wmh:
+            if info["target_wmh_path"]:
+                target_wmh = self._load_slice(info["target_wmh_path"], slice_idx, vmin=None, vmax=None)
+            else:
+                target_wmh = torch.zeros_like(target_flair)
+            target_img = torch.cat([target_flair, target_wmh], dim=0)   # always [2,H,W]
+        else:
+            target_img = target_flair                                   # always [1,H,W]
+
+        # after building source_img and target_img...
+        source_img = source_img.contiguous().clone()
+        target_img = target_img.contiguous().clone()
         
         return {
             "source": source_img,
@@ -519,7 +548,9 @@ class DownstreamSegmentationDataset(Dataset):
         denom = (vmax - vmin)
         if denom > 1e-8:
             img_slice = (img_slice - vmin) / denom
-        return torch.from_numpy(img_slice).unsqueeze(0)
+        # return torch.from_numpy(img_slice).unsqueeze(0) # OLD
+        # return torch.from_numpy(img_slice.copy()).unsqueeze(0) # ANOTHER OPTION
+        return torch.tensor(img_slice, dtype=torch.float32).unsqueeze(0) # RECOMMENDED
 
     def __getitem__(self, idx):
         info = self.index_map[idx]
@@ -1110,7 +1141,7 @@ def train_segmentation(model, loader, opt, device):
     return tot / len(loader)
 
 
-def run_stage2_segmentation(pred_flair_dir, wmh_gt_dir, device, models_dir):
+def run_stage2_segmentation(pred_flair_dir, wmh_gt_dir, device, models_dir, epoch_num=10):
     """Run Stage 2 WMH segmentation."""
     from torch.utils.data import DataLoader
     
@@ -1120,7 +1151,7 @@ def run_stage2_segmentation(pred_flair_dir, wmh_gt_dir, device, models_dir):
     model = SwinUNetSegmentation().to(device)
     opt = torch.optim.Adam(model.parameters(), lr=1e-4)
     
-    for ep in range(10):
+    for ep in range(epoch_num):
         loss = train_segmentation(model, dl, opt, device)
         print(f"[Stage2] Epoch {ep+1}: loss={loss:.4f}")
     
@@ -1144,7 +1175,8 @@ def segment_3d_volume(model, volume_3d, device):
             if denom > 1e-8:
                 slice_data = (slice_data - vmin) / denom
             
-            slice_tensor = torch.from_numpy(slice_data).unsqueeze(0).unsqueeze(0).float().to(device)
+            # slice_tensor = torch.from_numpy(slice_data).unsqueeze(0).unsqueeze(0).float().to(device)
+            slice_tensor = torch.from_numpy(slice_data.copy()).unsqueeze(0).unsqueeze(0).float().to(device)
             pred_mask = model(slice_tensor)
             pred_mask_binary = (pred_mask > 0.5).float()
             segmented_volume[:, :, slice_idx] = pred_mask_binary.squeeze().cpu().numpy()
@@ -1211,13 +1243,16 @@ def get_ground_truth_wmh_volume(wmh_dir, patient_id):
         return None, None
 
 
-def analyze_wmh_volume_progression(predicted_flair_base_dir, gt_wmh_dirs, time_points, device):
+def analyze_wmh_volume_progression(predicted_flair_base_dir, model_dir, gt_wmh_dirs, time_points, device):
     """Analyze WMH volume progression across time points."""
     volume_results = {}
     
     seg_model = SwinUNetSegmentation().to(device)
-    seg_model_path = os.path.join(os.path.dirname(predicted_flair_base_dir), "wmh_segmentation_swin_unet.pth")
+    # seg_model_path = os.path.join(os.path.dirname(predicted_flair_base_dir), "wmh_segmentation_swin_unet.pth")
+    seg_model_path = os.path.join(model_dir, "wmh_segmentation_swin_unet.pth")
     
+    print("model_dir:", model_dir)
+    print("seg_model_path:", seg_model_path)
     if os.path.exists(seg_model_path):
         seg_model.load_state_dict(torch.load(seg_model_path, map_location=device))
         print("✅ Loaded trained segmentation model")
@@ -1412,7 +1447,7 @@ def run_stage2_inference_only(pred_flair_dir, wmh_gt_dir, pretrained_model_path,
             denom = (vmax - vmin)
             if denom > 1e-8:
                 img_slice = (img_slice - vmin) / denom
-            return img_slice[None, :, :]  # Add channel dimension
+            return img_slice[None, :, :].copy()  # Add channel dimension
         
         def __getitem__(self, idx):
             info = self.index_map[idx]

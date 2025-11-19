@@ -66,42 +66,42 @@ class Experiment1(BaseExperiment):
             raise ValueError(f"Column '{column}' not found in {csv_path}. Columns: {list(df.columns)}")
         return [str(x).strip() for x in df[column].astype(str).tolist()]
     
-    def _diagnose_wmh(self, dataset):
-        print("\n================ WMH DIAGNOSTIC ================")
+    # def _diagnose_wmh(self, dataset):
+    #     print("\n================ WMH DIAGNOSTIC ================")
 
-        num_total = len(dataset)
-        num_with_wmh = 0
-        patients_with_wmh = set()
+    #     num_total = len(dataset)
+    #     num_with_wmh = 0
+    #     patients_with_wmh = set()
 
-        for i in range(num_total):
-            item = dataset[i]
-            target = item["target"]
+    #     for i in range(num_total):
+    #         item = dataset[i]
+    #         target = item["target"]
 
-            # If dataset loads only FLAIR (1 channel), skip
-            if target.shape[0] == 1:
-                continue
+    #         # If dataset loads only FLAIR (1 channel), skip
+    #         if target.shape[0] == 1:
+    #             continue
 
-            wmh_mask = target[1]  # Channel 1 = WMH
-            if wmh_mask.sum() > 0:
-                num_with_wmh += 1
-                patients_with_wmh.add(item["patient_id"])
+    #         wmh_mask = target[1]  # Channel 1 = WMH
+    #         if wmh_mask.sum() > 0:
+    #             num_with_wmh += 1
+    #             patients_with_wmh.add(item["patient_id"])
 
-        print(f"Total slices              : {num_total}")
-        print(f"Slices with WMH > 0       : {num_with_wmh}")
-        print(f"Patients with WMH slices  : {len(patients_with_wmh)}")
-        print(f"List of patients          : {sorted(list(patients_with_wmh))}")
+    #     print(f"Total slices              : {num_total}")
+    #     print(f"Slices with WMH > 0       : {num_with_wmh}")
+    #     print(f"Patients with WMH slices  : {len(patients_with_wmh)}")
+    #     print(f"List of patients          : {sorted(list(patients_with_wmh))}")
 
-        if num_with_wmh == 0:
-            print("⚠️  NO WMH SLICES FOUND!")
-            print("Possible reasons:")
-            print(" - use_wmh=False somewhere")
-            print(" - WMH paths missing in dataset")
-            print(" - Slices with WMH got skipped due to slice selection (14:)")
-            print(" - Wrong scan pairs (t1->t3 has no WMH available)")
-            print("=================================================\n")
-        else:
-            print("✅ WMH found in dataset.")
-            print("=================================================\n")
+    #     if num_with_wmh == 0:
+    #         print("⚠️  NO WMH SLICES FOUND!")
+    #         print("Possible reasons:")
+    #         print(" - use_wmh=False somewhere")
+    #         print(" - WMH paths missing in dataset")
+    #         print(" - Slices with WMH got skipped due to slice selection (14:)")
+    #         print(" - Wrong scan pairs (t1->t3 has no WMH available)")
+    #         print("=================================================\n")
+    #     else:
+    #         print("✅ WMH found in dataset.")
+    #         print("=================================================\n")
     
     def run(self):
         """Execute the full Experiment 1 pipeline."""
@@ -139,7 +139,7 @@ class Experiment1(BaseExperiment):
             training_pairs=training_pairs  # Only train on t1->t3
         )
 
-        self._diagnose_wmh(full_dataset)
+        # self._diagnose_wmh(full_dataset)
         
         # Load fold assignments
         fold_csv = self.config["FOLD_CSV"]
@@ -187,13 +187,13 @@ class Experiment1(BaseExperiment):
             Subset(full_dataset, train_indices),
             batch_size=self.config["BATCH_SIZE"],
             shuffle=True,
-            num_workers=2
+            num_workers=0
         )
         val_loader = DataLoader(
             Subset(full_dataset, val_indices),
             batch_size=self.config["BATCH_SIZE"],
             shuffle=False,
-            num_workers=2
+            num_workers=0
         )
         
         # Initialize model
@@ -436,7 +436,7 @@ class Experiment1(BaseExperiment):
         
         # Path to pretrained SwinUNETR model (same folder as this file)
         pretrained_model_path = os.path.join(
-            os.path.dirname(__file__), 
+            self.models_dir, 
             "best_swin_segmentation_model.pth"
         )
         
@@ -491,7 +491,8 @@ class Experiment1(BaseExperiment):
             predicted_flair_dir_3d,
             wmh_gt_dir,
             self.config["DEVICE"],
-            self.models_dir
+            self.models_dir,
+            self.config["NUM_EPOCHS"]
         )
         
         # Volume progression analysis
@@ -514,6 +515,7 @@ class Experiment1(BaseExperiment):
         # Analyze volumes
         volume_results = analyze_wmh_volume_progression(
             self.results_dir,
+            self.models_dir,
             gt_wmh_dirs,
             time_points,
             self.config["DEVICE"]

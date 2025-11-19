@@ -46,17 +46,17 @@ EXPERIMENTS = {
 
 CONFIG = {
     # Dataset
-    "ROOT_DIR": "/app/dataset/LBC1936",
-    # "ROOT_DIR": "/disk/febrian/Edinburgh_Data/LBC1936",
+    # "ROOT_DIR": "/app/dataset/LBC1936",
+    "ROOT_DIR": "/disk/febrian/Edinburgh_Data/LBC1936",
     "FOLD_CSV": "train_val_5fold.csv",
     "TEST_CSV": "test_set_patients.csv",
     
     # Training
-    "BATCH_SIZE": 2,
+    "BATCH_SIZE": 16,
     "LEARNING_RATE": 1e-4,
-    "NUM_EPOCHS": 5,
-    "MAX_SLICES": 8,
-    "MAX_PATIENTS_PER_FOLD": 5,
+    "NUM_EPOCHS": 100,
+    "MAX_SLICES": 48,
+    "MAX_PATIENTS_PER_FOLD": 10000,
     
     # Thresholds and coefficients
     "RECON_PSNR_THR": 40.0,

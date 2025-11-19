@@ -141,7 +141,7 @@ class Experiment2(BaseExperiment):
             training_pairs=training_pairs  # Only train on t1->t3
         )
 
-        self._diagnose_wmh(full_dataset)
+        # self._diagnose_wmh(full_dataset)
         
         # Load fold assignments
         fold_csv = self.config["FOLD_CSV"]
@@ -493,7 +493,8 @@ class Experiment2(BaseExperiment):
             predicted_flair_dir_3d,
             wmh_gt_dir,
             self.config["DEVICE"],
-            self.models_dir
+            self.models_dir,
+            self.config["NUM_EPOCHS"]
         )
         
         # Volume progression analysis
@@ -516,6 +517,7 @@ class Experiment2(BaseExperiment):
         # Analyze volumes
         volume_results = analyze_wmh_volume_progression(
             self.results_dir,
+            self.models_dir,
             gt_wmh_dirs,
             time_points,
             self.config["DEVICE"]
