@@ -8,12 +8,14 @@ All experiments follow the same pipeline with cross-validation.
 Usage:
     python main.py --exp 1  # Run Experiment 1: FLAIR ? FLAIR (two-stage, loss: L1 only)
     python main.py --exp 2  # Run Experiment 2: FLAIR ? FLAIR (two-stage, loss: L1 + SSIM)
-    python main.py --exp 3  # Run Experiment 3: FLAIR ? FLAIR (multi-horizon, loss: L1 + SSIM)
+    python main.py --exp 3  # Run Experiment 3: FLAIR ? FLAIR (dense-pairs, loss: L1)
+    python main.py --exp 4 # Run Experiment 4: FLAIR ? FLAIR (dense-pairs, loss: L1 + SSIM)
     
 Available Experiments:
     1: FLAIR ? FLAIR (two-stage: prediction then segmentation, loss: L1 only)
     2: FLAIR ? FLAIR (two-stage: prediction then segmentation, loss: L1 + SSIM)
-    3: FLAIR ? FLAIR (multi-horizon: t1->t2, t1->t3, t1->t4) prediction with downstream WMH segmentation
+    3: FLAIR ? FLAIR (dense-pairs: all possible pairs) prediction with downstream WMH segmentation (loss: L1)
+    4: FLAIR ? FLAIR (dense-pairs: all possible pairs) prediction with downstream WMH segmentation (loss: L1 + SSIM)
 """
 
 import os
@@ -25,14 +27,15 @@ import argparse
 from base import BaseExperiment
 from flair_to_flair import Experiment1
 from flair_to_flair_contrastive import Experiment2
-from flair_to_flair_multi_horizon import Experiment3
+from flair_to_flair_dense_pairs_L1 import Experiment3
+from flair_to_flair_dense_pairs_L1_SSIM import Experiment4
 
 # Registry of available experiments
 EXPERIMENTS = {
     1: {
         "name": "flair_to_flair_baseline",
         "use_wmh": True,
-        "description": "FLAIR -> FLAIR (two-stage: prediction then segmentation, loss: L1 only)",
+        "description": "FLAIR -> FLAIR (two-stairsge: prediction then segmentation, loss: L1 only)",
         "class": Experiment1
     },
     2: {
@@ -42,10 +45,16 @@ EXPERIMENTS = {
         "class": Experiment2
     },
     3: {
-        "name": "flair_to_flair_multi_horizon",
+        "name": "flair_to_flair_dense_pairs_L1",
         "use_wmh": True,
-        "description": "FLAIR -> FLAIR (multi-horizon: t1->t2, t1->t3, t1->t4) prediction with downstream WMH segmentation",
+        "description": "FLAIR -> FLAIR (dense-pairs: all possible pairs) prediction with downstream WMH segmentation (loss: L1)",
         "class": Experiment3
+    },
+    4: {
+        "name": "flair_to_flair_dense_pairs_L1_SSIM",
+        "use_wmh": True,
+        "description": "FLAIR -> FLAIR (dense-pairs: all possible pairs) prediction with downstream WMH segmentation (loss: L1 + SSIM)",
+        "class": Experiment4
     }
 }
 
@@ -63,7 +72,7 @@ CONFIG = {
     # Training
     "BATCH_SIZE": 16,
     "LEARNING_RATE": 1e-4,
-    "NUM_EPOCHS": 100,
+    "NUM_EPOCHS": 50,
     "MAX_SLICES": 48,
     "MAX_PATIENTS_PER_FOLD": 10000,
     
@@ -93,12 +102,14 @@ def parse_args():
 Available Experiments:
   1: FLAIR ? FLAIR (two-stage, loss: L1 only)
   2: FLAIR ? FLAIR (two-stage, loss: L1 + SSIM)
-  3: FLAIR ? FLAIR (multi-horizon, loss: L1 + SSIM)
+  3: FLAIR ? FLAIR (dense-pairs, loss: L1)
+  4: FLAIR ? FLAIR (dense-pairs, loss: L1 + SSIM)
 
 Examples:
   python main.py --exp 1    # Run Experiment 1
   python main.py --exp 2    # Run Experiment 2
   python main.py --exp 3    # Run Experiment 3
+  python main.py --exp 4    # Run Experiment 4
         """
     )
     parser.add_argument(
