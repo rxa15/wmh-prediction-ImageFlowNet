@@ -116,8 +116,8 @@ Examples:
         '--exp',
         type=int,
         required=True,
-        choices=[1, 2, 3],
-        help='Experiment number to run (1, 2, or 3)'
+        choices=[1, 2, 3, 4],
+        help='Experiment number to run (1, 2, 3, or 4)'
     )
     return parser.parse_args()
 
