@@ -104,9 +104,9 @@ class Experiment5(BaseExperiment):
     #         print("=================================================\n")
     
     def run(self):
-        """Execute the full Experiment 1 pipeline."""
+        """Execute the full Experiment 5 pipeline."""
         print("\n" + "="*60)
-        print("Starting Experiment 1: FLAIR → FLAIR (L1 only)")
+        print("Starting Experiment 5: FLAIR + WMH → FLAIR (L1 only)")
         print("="*60 + "\n")
         
         # Stage 1: Train ImageFlowNet models
