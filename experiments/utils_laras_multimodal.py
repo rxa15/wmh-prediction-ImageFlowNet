@@ -670,8 +670,8 @@ def train_epoch(
         # -------------------------------
         if hasattr(model, 'simsiam_project') and hasattr(model, 'simsiam_predict'):
             # Use only FLAIR for representation learning
-            z1 = model.simsiam_project(source_flair)
-            z2 = model.simsiam_project(target_flair)
+            z1 = model.simsiam_project(source_all)
+            z2 = model.simsiam_project(target_all)
             p1 = model.simsiam_predict(z1)
             p2 = model.simsiam_predict(z2)
             loss_contrastive = neg_cos_sim(p1, z2) / 2 + neg_cos_sim(p2, z1) / 2
