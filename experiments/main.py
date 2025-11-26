@@ -10,12 +10,14 @@ Usage:
     python main.py --exp 2  # Run Experiment 2: FLAIR ? FLAIR (two-stage, loss: L1 + SSIM)
     python main.py --exp 3  # Run Experiment 3: FLAIR ? FLAIR (dense-pairs, loss: L1)
     python main.py --exp 4 # Run Experiment 4: FLAIR ? FLAIR (dense-pairs, loss: L1 + SSIM)
+    python main.py --exp 5 # Run Experiment 5: FLAIR + WMH ? FLAIR (dense-pairs, loss: L1)
     
 Available Experiments:
     1: FLAIR ? FLAIR (two-stage: prediction then segmentation, loss: L1 only)
     2: FLAIR ? FLAIR (two-stage: prediction then segmentation, loss: L1 + SSIM)
     3: FLAIR ? FLAIR (dense-pairs: all possible pairs) prediction with downstream WMH segmentation (loss: L1)
     4: FLAIR ? FLAIR (dense-pairs: all possible pairs) prediction with downstream WMH segmentation (loss: L1 + SSIM)
+    5: FLAIR + WMH ? FLAIR (dense-pairs: all possible pairs) prediction with downstream WMH segmentation (loss: L1)
 """
 
 import os
@@ -29,6 +31,7 @@ from flair_to_flair import Experiment1
 from flair_to_flair_contrastive import Experiment2
 from flair_to_flair_dense_pairs_L1 import Experiment3
 from flair_to_flair_dense_pairs_L1_SSIM import Experiment4
+from flair_wmh_to_flair import Experiment5
 
 # Registry of available experiments
 EXPERIMENTS = {
@@ -55,7 +58,13 @@ EXPERIMENTS = {
         "use_wmh": True,
         "description": "FLAIR -> FLAIR (dense-pairs: all possible pairs) prediction with downstream WMH segmentation (loss: L1 + SSIM)",
         "class": Experiment4
-    }
+    },
+    5: {
+        "name": "flair_wmh_to_flair_baseline",
+        "use_wmh": True,
+        "description": "FLAIR + WMH -> FLAIR prediction with downstream WMH segmentation (loss: L1)",
+        "class": Experiment5
+    },
 }
 
 # ============================================================
@@ -104,20 +113,22 @@ Available Experiments:
   2: FLAIR ? FLAIR (two-stage, loss: L1 + SSIM)
   3: FLAIR ? FLAIR (dense-pairs, loss: L1)
   4: FLAIR ? FLAIR (dense-pairs, loss: L1 + SSIM)
+  5: FLAIR + WMH ? FLAIR (two-stage, loss: L1)
 
 Examples:
   python main.py --exp 1    # Run Experiment 1
   python main.py --exp 2    # Run Experiment 2
   python main.py --exp 3    # Run Experiment 3
   python main.py --exp 4    # Run Experiment 4
+  python main.py --exp 5    # Run Experiment 5
         """
     )
     parser.add_argument(
         '--exp',
         type=int,
         required=True,
-        choices=[1, 2, 3, 4],
-        help='Experiment number to run (1, 2, 3, or 4)'
+        choices=[1, 2, 3, 4, 5],
+        help='Experiment number to run (1, 2, 3, 4, or 5)'
     )
     return parser.parse_args()
 
