@@ -819,7 +819,9 @@ def visualize_results(source, ground_truth, predicted, patient_ids, slice_indice
         # Column 1: Source image(s)
         plt.subplot(n_samples, 3, i * 3 + 1)
         source_flair = source[i, 0].cpu().numpy()
-        plt.imshow(source_flair, cmap='gray')
+        # Ensure valid range for display
+        source_flair = np.clip(source_flair, 0.0, 1.0)
+        plt.imshow(source_flair, cmap='gray', vmin=0.0, vmax=1.0)
         
         # Overlay second channel if exists (WMH or DEM)
         if source.shape[1] > 1:
@@ -833,7 +835,8 @@ def visualize_results(source, ground_truth, predicted, patient_ids, slice_indice
         # Column 2: Ground Truth
         plt.subplot(n_samples, 3, i * 3 + 2)
         gt_flair = ground_truth[i, 0].cpu().numpy()
-        plt.imshow(gt_flair, cmap='gray')
+        gt_flair = np.clip(gt_flair, 0.0, 1.0)
+        plt.imshow(gt_flair, cmap='gray', vmin=0.0, vmax=1.0)
         
         # Overlay second channel if exists
         if ground_truth.shape[1] > 1:
@@ -847,8 +850,8 @@ def visualize_results(source, ground_truth, predicted, patient_ids, slice_indice
         # Column 3: Prediction
         plt.subplot(n_samples, 3, i * 3 + 3)
         pred_flair = predicted[i, 0].cpu().numpy()
-        pred_flair = np.clip(pred_flair, 0, 1)  # Ensure valid range
-        plt.imshow(pred_flair, cmap='gray')
+        pred_flair = np.clip(pred_flair, 0.0, 1.0)
+        plt.imshow(pred_flair, cmap='gray', vmin=0.0, vmax=1.0)
         
         # Overlay second channel if exists
         if predicted.shape[1] > 1:
@@ -1053,13 +1056,14 @@ def evaluate_and_visualize_tasks(model_path, source_loader, gt_loaders, device, 
                             pred_img[b_idx, 0].detach().cpu().numpy()
                         )
 
-                    # For visualization, you can still pass the *full* tensors
+                    # Visualization: use FLAIR channel only for all (consistent shapes)
                     if i == 0:
                         model_prefix = os.path.basename(model_path).split('.')[0]
+                        source_flair_vis = source_all[:, 0:1, ...]  # Extract FLAIR channel
                         visualize_results(
-                            source=source_all,          # keeps WMH overlay if present
-                            ground_truth=target_all,
-                            predicted=pred_img,         # 1-channel FLAIR
+                            source=source_flair_vis,    # [B, 1, H, W] - FLAIR only
+                            ground_truth=target_flair,  # [B, 1, H, W] - FLAIR only
+                            predicted=pred_img,         # [B, 1, H, W] - FLAIR prediction
                             patient_ids=patient_ids,
                             slice_indices=slice_indices,
                             filename=f"Comparison_{model_prefix}_to_{gt_pair_name}.png",
