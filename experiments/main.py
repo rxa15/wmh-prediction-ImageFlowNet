@@ -10,14 +10,21 @@ Usage:
     python main.py --exp 2  # Run Experiment 2: FLAIR ? FLAIR (two-stage, loss: L1 + SSIM)
     python main.py --exp 3  # Run Experiment 3: FLAIR ? FLAIR (dense-pairs, loss: L1)
     python main.py --exp 4 # Run Experiment 4: FLAIR ? FLAIR (dense-pairs, loss: L1 + SSIM)
-    python main.py --exp 5 # Run Experiment 5: FLAIR + WMH ? FLAIR (dense-pairs, loss: L1)
+    python main.py --exp 5 # Run Experiment 5: FLAIR + WMH ? FLAIR (two-stage, loss: L1)
+    python main.py --exp 6 # Run Experiment 6: FLAIR + WMH ? FLAIR (two-stage, loss: L1 + SSIM)
+    python main.py --exp 7 # Run Experiment 7: FLAIR + WMH ? FLAIR (dense-pairs, loss: L1)
+    python main.py --exp 8 # Run Experiment 8: FLAIR + WMH ? FLAIR (dense-pairs, loss: L1 + SSIM)
     
 Available Experiments:
     1: FLAIR ? FLAIR (two-stage: prediction then segmentation, loss: L1 only)
     2: FLAIR ? FLAIR (two-stage: prediction then segmentation, loss: L1 + SSIM)
     3: FLAIR ? FLAIR (dense-pairs: all possible pairs) prediction with downstream WMH segmentation (loss: L1)
     4: FLAIR ? FLAIR (dense-pairs: all possible pairs) prediction with downstream WMH segmentation (loss: L1 + SSIM)
-    5: FLAIR + WMH ? FLAIR (dense-pairs: all possible pairs) prediction with downstream WMH segmentation (loss: L1)
+    5: FLAIR + WMH ? FLAIR (two-stage: prediction then segmentation, loss: L1)
+    6: FLAIR + WMH ? FLAIR (two-stage: prediction then segmentation, loss: L1 + SSIM)
+    7: FLAIR + WMH ? FLAIR (dense-pairs: all possible pairs) prediction with downstream WMH segmentation (loss: L1)
+    8: FLAIR + WMH ? FLAIR (dense-pairs: all possible pairs) prediction with downstream WMH segmentation (loss: L1 + SSIM)
+    
 """
 
 import os
@@ -32,6 +39,9 @@ from flair_to_flair_contrastive import Experiment2
 from flair_to_flair_dense_pairs_L1 import Experiment3
 from flair_to_flair_dense_pairs_L1_SSIM import Experiment4
 from flair_wmh_to_flair import Experiment5
+from flair_wmh_to_flair_contrastive import Experiment6
+from flair_wmh_to_flair_dense_pairs_L1 import Experiment7   
+from flair_wmh_to_flair_dense_pairs_L1_SSIM import Experiment8
 
 # Registry of available experiments
 EXPERIMENTS = {
@@ -64,6 +74,24 @@ EXPERIMENTS = {
         "use_wmh": True,
         "description": "FLAIR + WMH -> FLAIR prediction with downstream WMH segmentation (loss: L1)",
         "class": Experiment5
+    },
+    6: {
+        "name": "flair_wmh_to_flair_contrastive",
+        "use_wmh": True,
+        "description": "FLAIR + WMH -> FLAIR prediction with downstream WMH segmentation (loss: L1 + SSIM)",
+        "class": Experiment6
+    },
+    7: {
+        "name": "flair_wmh_to_flair_dense_pairs_L1",
+        "use_wmh": True,
+        "description": "FLAIR + WMH -> FLAIR (dense-pairs: all possible pairs) prediction with downstream WMH segmentation (loss: L1)",
+        "class": Experiment7
+    },
+    8: {
+        "name": "flair_wmh_to_flair_dense_pairs_L1_SSIM",
+        "use_wmh": True,
+        "description": "FLAIR + WMH -> FLAIR (dense-pairs: all possible pairs) prediction with downstream WMH segmentation (loss: L1 + SSIM)",
+        "class": Experiment8
     },
 }
 
@@ -114,6 +142,9 @@ Available Experiments:
   3: FLAIR ? FLAIR (dense-pairs, loss: L1)
   4: FLAIR ? FLAIR (dense-pairs, loss: L1 + SSIM)
   5: FLAIR + WMH ? FLAIR (two-stage, loss: L1)
+  6: FLAIR + WMH ? FLAIR (two-stage, loss: L1 + SSIM)
+  7: FLAIR + WMH ? FLAIR (dense-pairs, loss: L1)
+  8: FLAIR + WMH ? FLAIR (dense-pairs, loss: L1 + SSIM)
 
 Examples:
   python main.py --exp 1    # Run Experiment 1
@@ -121,14 +152,17 @@ Examples:
   python main.py --exp 3    # Run Experiment 3
   python main.py --exp 4    # Run Experiment 4
   python main.py --exp 5    # Run Experiment 5
+  python main.py --exp 6    # Run Experiment 6
+  python main.py --exp 7    # Run Experiment 7
+  python main.py --exp 8    # Run Experiment 8
         """
     )
     parser.add_argument(
         '--exp',
         type=int,
         required=True,
-        choices=[1, 2, 3, 4, 5],
-        help='Experiment number to run (1, 2, 3, 4, or 5)'
+        choices=[1, 2, 3, 4, 5, 6, 7, 8],
+        help='Experiment number to run (1, 2, 3, 4, 5, 6, 7, or 8)'
     )
     return parser.parse_args()
 
