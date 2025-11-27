@@ -846,6 +846,7 @@ def visualize_results(source, ground_truth, predicted, patient_ids, slice_indice
         # Column 3: Prediction
         plt.subplot(n_samples, 3, i * 3 + 3)
         pred_flair = predicted[i, 0].cpu().numpy()
+        pred_flair = np.clip(pred_flair, 0.0, 1.0)  # Ensure valid range
         plt.imshow(pred_flair, cmap='gray')
         
         # Overlay second channel if exists
