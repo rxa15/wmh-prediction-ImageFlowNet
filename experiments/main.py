@@ -120,6 +120,9 @@ CONFIG = {
     
     # Cross-validation
     "CV_FOLDS": [1, 2, 3, 4, 5],
+
+    # Segmentation flag
+    "RUN_STAGE2": False,
     
     # Device
     "DEVICE": torch.device("cuda" if torch.cuda.is_available() else "cpu"),

@@ -114,10 +114,17 @@ class Experiment7(BaseExperiment):
         predicted_flair_dir, ground_truth_wmh_dir = self._stage1_train_imageflownet()
         
         # Stage 2: WMH Segmentation from predicted FLAIR
-        if predicted_flair_dir and ground_truth_wmh_dir:
-            self._stage2_wmh_segmentation(predicted_flair_dir, ground_truth_wmh_dir)
+        # if predicted_flair_dir and ground_truth_wmh_dir:
+        #     self._stage2_wmh_segmentation(predicted_flair_dir, ground_truth_wmh_dir)
+        # else:
+        #     print("[Stage 2] Skipped because Stage 1 did not complete successfully.")
+        if self.config.get("RUN_STAGE2", True):
+            if predicted_flair_dir and ground_truth_wmh_dir:
+                self._stage2_wmh_segmentation(predicted_flair_dir, ground_truth_wmh_dir)
+            else:
+                print("[Stage 2] Skipped because Stage 1 did not complete successfully.")
         else:
-            print("[Stage 2] Skipped because Stage 1 did not complete successfully.")
+            print("Stage 2 execution disabled in config. Skipping Stage 2.")
     
     def _stage1_train_imageflownet(self):
         """Train ImageFlowNet models using cross-validation (dense pairs)"""
@@ -455,19 +462,24 @@ class Experiment7(BaseExperiment):
             print(f"⚠️ Ground truth WMH directory not found: {ground_truth_wmh_dir}")
             print("Stage 2 skipped.")
         else:
+            stage2_results = None
+
             # Run Stage 2 inference using the pretrained model
-            stage2_results = self.run_stage2_inference(
-                pred_flair_dir=predicted_flair_dir,
-                wmh_gt_dir=ground_truth_wmh_dir,
-                pretrained_model_path=pretrained_model_path,
-                time_point_label="Scan3Wave4"
-            )
-            
-            if stage2_results:
-                print(f"\n✅ Stage 2 completed successfully!")
-                print(f"   Dice Score: {stage2_results['dice_score']:.4f}")
+            if not self.config.get("RUN_STAGE2", True):
+                print("Stage 2 execution disabled in config. Skipping Stage 2.")
             else:
-                print("\n⚠️ Stage 2 encountered errors.")
+                stage2_results = self.run_stage2_inference(
+                    pred_flair_dir=predicted_flair_dir,
+                    wmh_gt_dir=ground_truth_wmh_dir,
+                    pretrained_model_path=pretrained_model_path,
+                    time_point_label="Scan3Wave4"
+                )
+            
+                if stage2_results:
+                    print(f"\n✅ Stage 2 completed successfully!")
+                    print(f"   Dice Score: {stage2_results['dice_score']:.4f}")
+                else:
+                    print("\n⚠️ Stage 2 encountered errors.")
         
         print(f"\n{'='*60}")
         print(f"🎉 Experiment {self.experiment_number} Complete!")
