@@ -162,7 +162,9 @@ class Experiment7(BaseExperiment):
         # K-Fold Cross-Validation Training
         print(f"\n📈 Starting {self.config['K_FOLDS']}-Fold Cross-Validation Training...")
         
-        for val_fold_idx in self.config["CV_FOLDS"]:
+        folds_to_run = self.config.get("FOLDS_TO_RUN", self.config["CV_FOLDS"])
+
+        for val_fold_idx in folds_to_run:
             self._train_fold(val_fold_idx, full_dataset, folds_dict)
         
         # Final Evaluation

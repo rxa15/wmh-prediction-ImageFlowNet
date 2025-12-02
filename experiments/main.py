@@ -121,6 +121,8 @@ CONFIG = {
     # Cross-validation
     "CV_FOLDS": [1, 2, 3, 4, 5],
 
+    "FOLDS_TO_RUN": None,
+
     # Segmentation flag
     "RUN_STAGE2": False,
     
