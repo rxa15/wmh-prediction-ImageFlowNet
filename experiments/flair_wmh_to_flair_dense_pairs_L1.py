@@ -390,8 +390,9 @@ class Experiment7(BaseExperiment):
         
         # Save test set evaluation results to CSV
         test_results_data = []
-        for i, result in enumerate(all_results):
-            fold_idx = self.config["CV_FOLDS"][i]
+        for path, result in zip(model_paths, all_results):
+            base = os.path.basename(path)
+            fold_idx = base.split("fold_")[-1].split(".")[0]
             test_results_data.append({
                 'fold': fold_idx,
                 'model_path': os.path.basename(result['model_path']),
