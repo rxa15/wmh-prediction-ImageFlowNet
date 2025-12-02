@@ -115,10 +115,17 @@ class Experiment8(BaseExperiment):
         predicted_flair_dir, ground_truth_wmh_dir = self._stage1_train_imageflownet()
         
         # Stage 2: WMH Segmentation from predicted FLAIR
-        if predicted_flair_dir and ground_truth_wmh_dir:
-            self._stage2_wmh_segmentation(predicted_flair_dir, ground_truth_wmh_dir)
+        # if predicted_flair_dir and ground_truth_wmh_dir:
+        #     self._stage2_wmh_segmentation(predicted_flair_dir, ground_truth_wmh_dir)
+        # else:
+        #     print("[Stage 2] Skipped because Stage 1 did not complete successfully.")
+        if self.config.get("RUN_STAGE2", True):
+            if predicted_flair_dir and ground_truth_wmh_dir:
+                self._stage2_wmh_segmentation(predicted_flair_dir, ground_truth_wmh_dir)
+            else:
+                print("[Stage 2] Skipped because Stage 1 did not complete successfully.")
         else:
-            print("[Stage 2] Skipped because Stage 1 did not complete successfully.")
+            print("Stage 2 execution disabled in config. Skipping Stage 2.")
     
     def _stage1_train_imageflownet(self):
         """Train ImageFlowNet models using cross-validation (dense pairs)"""
@@ -156,7 +163,8 @@ class Experiment8(BaseExperiment):
         # K-Fold Cross-Validation Training
         print(f"\n📈 Starting {self.config['K_FOLDS']}-Fold Cross-Validation Training...")
         
-        for val_fold_idx in self.config["CV_FOLDS"]:
+        folds_to_run = self.config.get("FOLDS_TO_RUN", self.config["CV_FOLDS"])
+        for val_fold_idx in folds_to_run:
             self._train_fold(val_fold_idx, full_dataset, folds_dict)
         
         # Final Evaluation
@@ -217,7 +225,7 @@ class Experiment8(BaseExperiment):
             max_epochs=self.config["NUM_EPOCHS"]
         )
         ema = ExponentialMovingAverage(model.parameters(), decay=0.9)
-        recon_loss = nn.L1Loss()
+        recon_loss = L1SSIMLoss(alpha=0.7)
         
         best_val_delta_psnr = 0.0
         recon_good_enough = False
@@ -382,8 +390,9 @@ class Experiment8(BaseExperiment):
         
         # Save test set evaluation results to CSV
         test_results_data = []
-        for i, result in enumerate(all_results):
-            fold_idx = self.config["CV_FOLDS"][i]
+        for path, result in zip(model_paths, all_results):
+            base = os.path.basename(path)
+            fold_idx = base.split("fold_")[-1].split(".")[0]
             test_results_data.append({
                 'fold': fold_idx,
                 'model_path': os.path.basename(result['model_path']),
@@ -456,19 +465,23 @@ class Experiment8(BaseExperiment):
             print(f"⚠️ Ground truth WMH directory not found: {ground_truth_wmh_dir}")
             print("Stage 2 skipped.")
         else:
+            stage2_results = None
             # Run Stage 2 inference using the pretrained model
-            stage2_results = self.run_stage2_inference(
-                pred_flair_dir=predicted_flair_dir,
-                wmh_gt_dir=ground_truth_wmh_dir,
-                pretrained_model_path=pretrained_model_path,
-                time_point_label="Scan3Wave4"
-            )
-            
-            if stage2_results:
-                print(f"\n✅ Stage 2 completed successfully!")
-                print(f"   Dice Score: {stage2_results['dice_score']:.4f}")
+            if not self.config.get("RUN_STAGE2", True):
+                print("Stage 2 execution disabled in config. Skipping Stage 2.")
             else:
-                print("\n⚠️ Stage 2 encountered errors.")
+                stage2_results = self.run_stage2_inference(
+                    pred_flair_dir=predicted_flair_dir,
+                    wmh_gt_dir=ground_truth_wmh_dir,
+                    pretrained_model_path=pretrained_model_path,
+                    time_point_label="Scan3Wave4"
+                )
+            
+                if stage2_results:
+                    print(f"\n✅ Stage 2 completed successfully!")
+                    print(f"   Dice Score: {stage2_results['dice_score']:.4f}")
+                else:
+                    print("\n⚠️ Stage 2 encountered errors.")
         
         print(f"\n{'='*60}")
         print(f"🎉 Experiment {self.experiment_number} Complete!")
